@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>PixelCatch harness</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 24px; }
+  h2 { margin: 28px 0 8px; font-size: 15px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .grid img, .grid canvas { width: 100%; background: #eee; }
+  #tiny { width: 40px; height: 40px; }
+  #lazy { width: 200px; height: 120px; }
+  .scroll { height: 200px; overflow: auto; border: 1px solid #ccc; }
+  .tall { height: 3000px; }
+  #status { font-family: ui-monospace, monospace; white-space: pre-wrap; padding: 8px; background: #111; color: #0f0; }
+</style>
+</head>
+<body>
+<h1>PixelCatch test harness</h1>
+<p id="status">waiting…</p>
+
+<h2>1. Imágenes presentes en el DOM inicial</h2>
+<div class="grid" id="initial"></div>
+
+<h2>2. Pequeña (debe filtrarse por minSize)</h2>
+<img id="tiny" alt="">
+
+<h2>3. srcset / picture / link a original</h2>
+<div class="grid" id="responsive"></div>
+
+<h2>4. blob: URL</h2>
+<div class="grid" id="blobs"></div>
+
+<h2>5. Lazy dentro de scroll (IntersectionObserver)</h2>
+<div class="scroll">
+  <div class="tall"></div>
+  <img id="lazy" alt="" loading="lazy">
+  <div class="grid" id="lazyList"></div>
+</div>
+
+<h2>6. Inyección posterior (MutationObserver)</h2>
+<button id="inject">add 4 more</button>
+<div class="grid" id="late"></div>
+
+<script>
+// 1. Genera imágenes en el DOM antes de que corra el detector.
+function svg(color, label) {
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><rect width="200" height="200" fill="${color}"/><text x="10" y="105" font-size="24" fill="#fff">${label}</text></svg>`
+  );
+}
+const initial = document.getElementById('initial');
+for (const [i, c] of ['#c0392b', '#27ae60', '#2980b9', '#8e44ad'].entries()) {
+  const img = new Image();
+  img.src = svg(c, `init ${i + 1}`);
+  initial.append(img);
+}
+
+const tiny = document.getElementById('tiny');
+tiny.src = svg('#7f8c8d', 'tiny 40px');
+
+// 3. srcset + <picture> + <a> que apunta al original.
+const resp = document.getElementById('responsive');
+const pic = document.createElement('picture');
+pic.innerHTML =
+  `<source srcset="${svg('#d35400', 'small')} 200w" media="(min-width: 1px)">` +
+  `<img src="${svg('#b9770e', 'large')}" srcset="${svg('#b9770e', 'large')} 400w" alt="">`;
+resp.append(pic);
+
+const a = document.createElement('a');
+a.href = svg('#c0392b', 'original');
+const linkImg = new Image();
+linkImg.src = svg('#7d6608', 'thumb');
+a.append(linkImg);
+resp.append(a);
+
+// 4. blob: URL (simula canvas/Screenshot API).
+document.getElementById('blobs').append(blobImage('#16a085', 'blob 1'));
+document.getElementById('blobs').append(blobImage('#2c3e50', 'blob 2'));
+
+function blobImage(color, label) {
+  const c = document.createElement('canvas');
+  c.width = 220;
+  c.height = 220;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 220, 220);
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px sans-serif';
+  ctx.fillText(label, 12, 118);
+  const img = new Image();
+  img.src = c.toDataURL('image/png');
+  return img;
+}
+
+// 5. Lazy + scroll.
+document.getElementById('lazy').src = svg('#1f618d', 'lazy');
+const lazyList = document.getElementById('lazyList');
+for (let i = 0; i < 4; i++) lazyList.append(Object.assign(new Image(), { src: svg('#117864', `lz ${i}`) }));
+
+// 6. Inyección tardía bajo demanda.
+document.getElementById('inject').onclick = () => {
+  const late = document.getElementById('late');
+  for (let i = 0; i < 4; i++) late.append(Object.assign(new Image(), { src: svg('#6c3483', `late ${i}`) }));
+};
+
+<script>
+// El harness no intercepta mensajes: la galería se lee desde el service
+// worker igual que en cualquier pestaña real.
+window.__pcGetState = async () => {
+  const tab = await chrome.tabs.getCurrent();
+  return chrome.runtime.sendMessage({ type: 'PC_GET_STATE', tabId: tab.id });
+};
+</script>
+</script>
+</body>
+</html>

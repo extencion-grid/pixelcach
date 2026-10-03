@@ -1,0 +1,52 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Opciones PixelCatch</title>
+<link rel="stylesheet" href="../assets/styles/tokens.css">
+<link rel="stylesheet" href="../assets/styles/design.css">
+</head>
+<body>
+<div class="container" style="max-width:720px">
+  <div class="header">
+    <img src="../../icons/brand.png" alt="">
+    <h1 style="margin:0" data-i18n="settings">Ajustes</h1>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <label style="display:block;margin-bottom:6px" data-i18n="defaultFormat">Formato por defecto</label>
+    <select id="defaultFormat" class="input">
+      <option value="png">PNG</option>
+      <option value="jpg">JPG</option>
+      <option value="webp">WebP</option>
+      <option value="avif">AVIF</option>
+    </select>
+
+    <label style="display:block;margin:12px 0 6px" data-i18n="minSize">Tamaño mínimo (px)</label>
+    <input id="minSize" class="input" type="number" min="0" value="150">
+
+    <label style="display:block;margin:12px 0 6px" data-i18n="nameTemplate">Plantilla de nombre</label>
+    <input id="nameTemplate" class="input" value="{domain}-{date}-{index}">
+
+    <label style="display:block;margin:12px 0 6px" data-i18n="concurrency">Descargas en paralelo</label>
+    <input id="downloadConcurrency" class="input" type="number" min="1" max="8" value="4">
+
+    <label class="check-row">
+      <input id="detectBackgrounds" type="checkbox">
+      <span data-i18n="backgroundScan">Buscar fondos (CSS)</span>
+    </label>
+
+    <label class="check-row">
+      <input id="detectResources" type="checkbox">
+      <span data-i18n="resourceScan">Detectar imágenes por resource timing</span>
+    </label>
+
+    <label class="check-row">
+      <input id="debugEnabled" type="checkbox">
+      <span data-i18n="debugMode">Modo debug</span>
+    </label>
+
+    <button id="save" class="btn btn-primary" style="margin-top:12px" data-i18n="save">Guardar</button>
+    <div id="status" style="margin-top:8px;color:var(--color-success)"></div>
+  </div>
+</div>
+<script type="module" src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+{
+  "name": "pixelcatch",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Extensión Chrome MV3 que detecta y guarda imágenes de páginas con galería previa, ZIP o carpeta. Sin telemetría.",
+  "scripts": {
+    "check": "node scripts/check.mjs",
+    "test": "node --test test/unit/*.test.mjs"
+  }
+}
