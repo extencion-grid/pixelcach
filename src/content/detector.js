@@ -19,8 +19,8 @@
   ];
   const PAGE_RE = /\.(html?|php|aspx?|jsp|cfm)($|[?#])/i;
   const MAX_BATCH = 50;
-  const FLUSH_DELAY = 120;
-  const RETRY_DELAY = 400;
+  const FLUSH_DELAY = 80;
+  const RETRY_DELAY = 300;
 
   const seen = new Set();
   const pendingQueue = [];
@@ -420,6 +420,16 @@
       lastPointer = { x: e.clientX, y: e.clientY };
     },
     { passive: true, capture: true }
+  );
+
+  // Cada <img> que termina de cargar dispara 'load' en fase de captura:
+  // re-reporte inmediato con dimensiones reales, sin esperar al observer.
+  document.addEventListener(
+    'load',
+    (e) => {
+      if (e.target?.tagName === 'IMG') reportImage(e.target);
+    },
+    true
   );
 
   function initialize() {

@@ -14,30 +14,11 @@
   </header>
 
   <section class="toolbar card">
-    <div class="row">
+    <div class="row no-margin">
       <input id="search" class="input grow" data-i18n-placeholder="search" placeholder="Buscar">
-      <select id="typeFilter" class="input input-narrow">
-        <option value="all" data-i18n="all">Todos</option>
-        <option value="png">PNG</option>
-        <option value="jpg">JPG</option>
-        <option value="webp">WebP</option>
-        <option value="avif">AVIF</option>
-        <option value="gif">GIF</option>
-        <option value="unknown" data-i18n="unknown">Otros</option>
-      </select>
-      <input id="minWidth" class="input input-narrow" type="number" min="0" data-i18n-placeholder="minWidth" placeholder="px">
-    </div>
-    <div class="row">
-      <button id="selectAll" class="btn" data-i18n="selectAll">Seleccionar todo</button>
-      <div class="range-group">
-        <input id="rangeFrom" class="input input-narrow" type="number" min="1" placeholder="1">
-        <span class="muted small">–</span>
-        <input id="rangeTo" class="input input-narrow" type="number" min="1" placeholder="10">
-        <button id="selectRange" class="btn" data-i18n="selectRange">Rango</button>
-      </div>
-      <button id="reScan" class="btn" data-i18n="rescan">Re-escanear</button>
-      <button id="scanBackgrounds" class="btn" data-i18n="backgroundScan">Fondos</button>
-      <button id="clearList" class="btn btn-danger" data-i18n="clearList">Vaciar</button>
+      <button id="selectAll" class="btn" data-i18n="selectAll">Todo</button>
+      <button id="reScan" class="btn btn-icon" data-i18n="rescan" title="Re-escanear">↻</button>
+      <button id="clearList" class="btn btn-icon btn-danger" data-i18n="clearList" title="Vaciar">✕</button>
     </div>
   </section>
 
@@ -48,10 +29,9 @@
   <footer class="downloadbar">
     <div class="progress"><i id="progressBar"></i></div>
     <div class="row no-margin">
-      <input id="folderName" class="input grow" data-i18n-placeholder="folderName" placeholder="Nombre carpeta">
+      <input id="folderName" class="input grow" data-i18n-placeholder="folderName" placeholder="Carpeta (opcional)">
       <button id="downloadFolder" class="btn" data-i18n="downloadFolder">Carpeta</button>
       <button id="downloadZip" class="btn btn-primary" data-i18n="downloadZip">ZIP</button>
-      <button id="exportDebug" class="btn btn-icon" data-i18n="exportLog" title="Exportar log">⌧</button>
     </div>
   </footer>
 </div>

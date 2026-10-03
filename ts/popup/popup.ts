@@ -13,18 +13,11 @@ const els = {
   grid: $<El>('grid'),
   folderName: $<HTMLInputElement>('folderName'),
   search: $<HTMLInputElement>('search'),
-  minWidth: $<HTMLInputElement>('minWidth'),
-  typeFilter: $<HTMLSelectElement>('typeFilter'),
   selectAll: $<HTMLButtonElement>('selectAll'),
-  rangeFrom: $<HTMLInputElement>('rangeFrom'),
-  rangeTo: $<HTMLInputElement>('rangeTo'),
-  selectRange: $<HTMLButtonElement>('selectRange'),
   downloadFolder: $<HTMLButtonElement>('downloadFolder'),
   downloadZip: $<HTMLButtonElement>('downloadZip'),
   reScan: $<HTMLButtonElement>('reScan'),
-  scanBackgrounds: $<HTMLButtonElement>('scanBackgrounds'),
   clearList: $<HTMLButtonElement>('clearList'),
-  exportDebug: $<HTMLButtonElement>('exportDebug'),
   progressBar: $<El>('progressBar'),
   options: $<HTMLButtonElement>('options')
 };
@@ -59,7 +52,7 @@ let selected = new Set<string>();
 let renderedNodes = new Map<string, { card: HTMLElement; check: HTMLInputElement }>();
 let activeTabId: number | null = null;
 const config: Config = await loadConfig();
-const filter = { q: '', minWidth: 0, type: 'all' };
+const filter = { q: '' };
 let renderOffset = 0;
 let sentinelObserver: IntersectionObserver | null = null;
 
@@ -68,16 +61,10 @@ const keyOfPanel = (it: GalleryItem): string =>
 
 function visibleItems(): GalleryItem[] {
   const q = filter.q.trim().toLowerCase();
-  return items.filter((it) => {
-    if (filter.minWidth && (it.width || 0) < filter.minWidth) return false;
-    if (filter.type !== 'all') {
-      const ext = it.truncated ? 'unknown' : (it.src.split('?')[0].split('.').pop() || '').toLowerCase();
-      const fromType = it.type === 'bg' || it.type === 'resource' || it.type === 'canvas' ? 'unknown' : ext;
-      if (fromType !== filter.type) return false;
-    }
-    if (q && !it.src.toLowerCase().includes(q) && !(it.url || '').toLowerCase().includes(q)) return false;
-    return true;
-  });
+  if (!q) return items;
+  return items.filter(
+    (it) => it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q)
+  );
 }
 
 function makeCard(item: GalleryItem, index: number): { card: HTMLElement; check: HTMLInputElement } {
@@ -190,7 +177,7 @@ function setProgress(ratio: number): void {
 }
 
 function setBusy(busy: boolean): void {
-  for (const btn of [els.downloadFolder, els.downloadZip, els.reScan, els.scanBackgrounds]) {
+  for (const btn of [els.downloadFolder, els.downloadZip, els.reScan]) {
     btn.disabled = busy;
   }
 }
@@ -285,35 +272,13 @@ els.selectAll.onclick = () => {
   syncChecksFromSelection(list, selected.size === list.length);
 };
 
-els.selectRange.onclick = () => {
-  const from = parseInt(els.rangeFrom.value, 10);
-  const to = parseInt(els.rangeTo.value, 10);
-  if (!from || !to || from > to) return;
-  selected.clear();
-  for (let i = Math.max(0, from - 1); i < Math.min(to, items.length); i++) {
-    selected.add(keyOfPanel(items[i]));
-  }
-  for (const [key, entry] of renderedNodes) {
-    entry.check.checked = selected.has(key);
-    paintSelection(entry.card, entry.check.checked);
-  }
-  updateCounters();
-};
 
 els.search.oninput = () => {
   filter.q = els.search.value;
   applyFilters(true);
 };
 
-els.minWidth.oninput = () => {
-  filter.minWidth = parseInt(els.minWidth.value, 10) || 0;
-  applyFilters(true);
-};
 
-els.typeFilter.onchange = () => {
-  filter.type = els.typeFilter.value;
-  applyFilters(true);
-};
 
 async function runDownload(zip: boolean): Promise<void> {
   const chosen = items.filter((it) => selected.has(keyOfPanel(it)));
@@ -359,18 +324,6 @@ els.reScan.onclick = async () => {
   setBusy(false);
 };
 
-els.scanBackgrounds.onclick = async () => {
-  setBusy(true);
-  await chrome.runtime.sendMessage({ type: MSG.SCAN_BACKGROUNDS, tabId: activeTabId }).catch(() => {});
-  const res = (await chrome.runtime.sendMessage({ type: MSG.GET_STATE, tabId: activeTabId }).catch(() => null)) as
-    | { items?: GalleryItem[] }
-    | null;
-  if (res?.items) {
-    items = res.items;
-    applyFilters(true);
-  }
-  setBusy(false);
-};
 
 els.clearList.onclick = async () => {
   selected.clear();
@@ -379,9 +332,7 @@ els.clearList.onclick = async () => {
   applyFilters(true);
 };
 
-els.exportDebug.onclick = () => {
-  chrome.runtime.sendMessage({ type: MSG.EXPORT_DEBUG, tabId: activeTabId }).catch(() => {});
-};
+
 
 els.options.onclick = () => {
   chrome.runtime.openOptionsPage();

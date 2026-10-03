@@ -8,18 +8,11 @@ const els = {
     grid: $('grid'),
     folderName: $('folderName'),
     search: $('search'),
-    minWidth: $('minWidth'),
-    typeFilter: $('typeFilter'),
     selectAll: $('selectAll'),
-    rangeFrom: $('rangeFrom'),
-    rangeTo: $('rangeTo'),
-    selectRange: $('selectRange'),
     downloadFolder: $('downloadFolder'),
     downloadZip: $('downloadZip'),
     reScan: $('reScan'),
-    scanBackgrounds: $('scanBackgrounds'),
     clearList: $('clearList'),
-    exportDebug: $('exportDebug'),
     progressBar: $('progressBar'),
     options: $('options')
 };
@@ -28,25 +21,15 @@ let selected = new Set();
 let renderedNodes = new Map();
 let activeTabId = null;
 const config = await loadConfig();
-const filter = { q: '', minWidth: 0, type: 'all' };
+const filter = { q: '' };
 let renderOffset = 0;
 let sentinelObserver = null;
 const keyOfPanel = (it) => it.truncated ? `data#${it.hash}:${it.dataLength}` : it.src?.startsWith('blob:') ? `${it.src}|${it.width}x${it.height}` : it.src;
 function visibleItems() {
     const q = filter.q.trim().toLowerCase();
-    return items.filter((it) => {
-        if (filter.minWidth && (it.width || 0) < filter.minWidth)
-            return false;
-        if (filter.type !== 'all') {
-            const ext = it.truncated ? 'unknown' : (it.src.split('?')[0].split('.').pop() || '').toLowerCase();
-            const fromType = it.type === 'bg' || it.type === 'resource' || it.type === 'canvas' ? 'unknown' : ext;
-            if (fromType !== filter.type)
-                return false;
-        }
-        if (q && !it.src.toLowerCase().includes(q) && !(it.url || '').toLowerCase().includes(q))
-            return false;
-        return true;
-    });
+    if (!q)
+        return items;
+    return items.filter((it) => it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q));
 }
 function makeCard(item, index) {
     const card = document.createElement('div');
@@ -153,7 +136,7 @@ function setProgress(ratio) {
     els.progressBar.style.width = `${Math.round(Math.max(0, Math.min(1, ratio)) * 100)}%`;
 }
 function setBusy(busy) {
-    for (const btn of [els.downloadFolder, els.downloadZip, els.reScan, els.scanBackgrounds]) {
+    for (const btn of [els.downloadFolder, els.downloadZip, els.reScan]) {
         btn.disabled = busy;
     }
 }
@@ -242,31 +225,8 @@ els.selectAll.onclick = () => {
     const list = visibleItems();
     syncChecksFromSelection(list, selected.size === list.length);
 };
-els.selectRange.onclick = () => {
-    const from = parseInt(els.rangeFrom.value, 10);
-    const to = parseInt(els.rangeTo.value, 10);
-    if (!from || !to || from > to)
-        return;
-    selected.clear();
-    for (let i = Math.max(0, from - 1); i < Math.min(to, items.length); i++) {
-        selected.add(keyOfPanel(items[i]));
-    }
-    for (const [key, entry] of renderedNodes) {
-        entry.check.checked = selected.has(key);
-        paintSelection(entry.card, entry.check.checked);
-    }
-    updateCounters();
-};
 els.search.oninput = () => {
     filter.q = els.search.value;
-    applyFilters(true);
-};
-els.minWidth.oninput = () => {
-    filter.minWidth = parseInt(els.minWidth.value, 10) || 0;
-    applyFilters(true);
-};
-els.typeFilter.onchange = () => {
-    filter.type = els.typeFilter.value;
     applyFilters(true);
 };
 async function runDownload(zip) {
@@ -310,24 +270,11 @@ els.reScan.onclick = async () => {
     }
     setBusy(false);
 };
-els.scanBackgrounds.onclick = async () => {
-    setBusy(true);
-    await chrome.runtime.sendMessage({ type: MSG.SCAN_BACKGROUNDS, tabId: activeTabId }).catch(() => { });
-    const res = (await chrome.runtime.sendMessage({ type: MSG.GET_STATE, tabId: activeTabId }).catch(() => null));
-    if (res?.items) {
-        items = res.items;
-        applyFilters(true);
-    }
-    setBusy(false);
-};
 els.clearList.onclick = async () => {
     selected.clear();
     await chrome.runtime.sendMessage({ type: MSG.CLEAR_LIST, tabId: activeTabId }).catch(() => { });
     items = [];
     applyFilters(true);
-};
-els.exportDebug.onclick = () => {
-    chrome.runtime.sendMessage({ type: MSG.EXPORT_DEBUG, tabId: activeTabId }).catch(() => { });
 };
 els.options.onclick = () => {
     chrome.runtime.openOptionsPage();

@@ -39,6 +39,12 @@ async function drawAndExport(source, width, height, mime) {
 }
 
 async function convertImage(src, mime) {
+  // Formato "original" (mime null): paso en crudo, sin tocar píxeles.
+  if (!mime) {
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`http-${res.status}`);
+    return res.blob();
+  }
   // Camino 1: cargar la imagen en este contexto sin forzar CORS.
   // Funciona para mismo-origen, data: y blob: de esta origen.
   try {
@@ -89,7 +95,8 @@ async function buildZipBlob(items, folderName, tabId) {
 
     const path = folderName ? `${folderName}/${name}` : name;
     try {
-      const blob = await convertImage(item.src, item.mime || 'image/png');
+      // mime undefined → png por compat; mime null explícito → raw "original".
+      const blob = await convertImage(item.src, item.mime === undefined ? 'image/png' : item.mime);
       zip.file(path, blob);
     } catch (e) {
       const err = `${path}.error.txt`;

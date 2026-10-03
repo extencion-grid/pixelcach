@@ -1,5 +1,5 @@
 export interface Config {
-  defaultFormat: 'png' | 'jpg' | 'webp' | 'avif';
+  defaultFormat: 'original' | 'png' | 'jpg' | 'webp' | 'avif';
   minSize: number;
   nameTemplate: string;
   detectBackgrounds: boolean;
@@ -9,7 +9,7 @@ export interface Config {
 }
 
 const DEFAULTS: Config = {
-  defaultFormat: 'png',
+  defaultFormat: 'original',
   minSize: 0,
   nameTemplate: '{domain}-{date}-{index}',
   detectBackgrounds: true,

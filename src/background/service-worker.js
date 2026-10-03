@@ -5,11 +5,13 @@ import * as state from '../lib/state.js';
 import { buildFilename } from '../lib/filename.js';
 
 const FORMATS = {
+  original: { id: 'original', title: 'Original', mime: null, ext: null },
   png: { id: 'png', title: 'PNG', mime: 'image/png', ext: 'png' },
   jpg: { id: 'jpg', title: 'JPG', mime: 'image/jpeg', ext: 'jpg' },
   webp: { id: 'webp', title: 'WebP', mime: 'image/webp', ext: 'webp' },
   avif: { id: 'avif', title: 'AVIF', mime: 'image/avif', ext: 'avif' }
 };
+const MENU_FORMATS = ['png', 'jpg', 'webp', 'avif'];
 
 const POPUP_ID = 'pixelcatch-root';
 const UNSAFE_NAME = /[\\/:*?"<>|]+/g;
@@ -26,7 +28,8 @@ const configReady = loadConfig().then((c) => (config = c));
 function createMenus() {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({ id: POPUP_ID, title: 'Guardar imagen como…', contexts: ['image'] });
-    for (const f of Object.values(FORMATS)) {
+    for (const id of MENU_FORMATS) {
+      const f = FORMATS[id];
       chrome.contextMenus.create({
         id: `pixelcatch-${f.id}`,
         parentId: POPUP_ID,
@@ -36,6 +39,27 @@ function createMenus() {
     }
   });
 }
+
+// AVIF no se puede codificar en todos los navegadores: se prueba una vez y,
+// si falla, se oculta la entrada del menú (idea tomada de SaveAsExtension).
+async function probeAvifSupport() {
+  try {
+    const canvas = new OffscreenCanvas(2, 2);
+    canvas.getContext('2d').fillRect(0, 0, 2, 2);
+    const blob = await canvas.convertToBlob({ type: 'image/avif' });
+    if (blob.type !== 'image/avif') {
+      await chrome.contextMenus.remove('pixelcatch-avif').catch(() => {});
+    }
+  } catch {
+    await chrome.contextMenus.remove('pixelcatch-avif').catch(() => {});
+  }
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  createMenus();
+  probeAvifSupport();
+});
+chrome.runtime.onStartup.addListener(createMenus);
 
 async function ensureOffscreen() {
   if (!(await chrome.offscreen.hasDocument?.())) {
@@ -172,10 +196,11 @@ function isHttp(src) {
   return /^https?:/i.test(src);
 }
 
-// Descarga directa solo si es http(s) y el formato pedido coincide con el
-// original; en otro caso hay que convertir para no mentir con la extensión.
+// Descarga directa solo si es http(s) y (o no hay conversión pedida o el
+// formato pedido coincide con el original): así no se re-codifica nada.
 function canDirectDownload(src, ext) {
   if (!isHttp(src)) return false;
+  if (ext == null) return true; // formato "original"
   const cur = urlExt(src);
   if (!IMG_EXT_RE.test(cur)) return false;
   return (cur === 'jpeg' ? 'jpg' : cur) === ext;
@@ -225,12 +250,32 @@ async function runPool(items, concurrency, task, onProgress) {
   return { done: items.length - failures.length, failures };
 }
 
+// Extensión para el nombre según el origen: la de la URL si existe; para
+// data: el subtipo del MIME; si nada cuadra, png.
+function extFor(item, src, fmt) {
+  if (fmt.ext) return fmt.ext;
+  const fromUrl = urlExt(src);
+  if (IMG_EXT_RE.test(fromUrl)) return fromUrl === 'jpeg' ? 'jpg' : fromUrl;
+  if (src.startsWith('data:')) {
+    const m = /^data:image\/([a-z0-9+.-]+)/i.exec(src);
+    if (m) return m[1] === 'jpeg' ? 'jpg' : m[1].toLowerCase();
+  }
+  return 'png';
+}
+
 async function downloadItem(tabId, item, index, { prefix, configNow, fmt, now }) {
-  const name = buildFilename(item, index, configNow, fmt.ext, now);
   const src = await resolveItemSrc(tabId, item);
   if (!src) throw new Error('src-unavailable');
+  const name = buildFilename(item, index, configNow, extFor(item, src, fmt), now);
 
   if (canDirectDownload(src, fmt.ext)) {
+    await chrome.downloads.download({ url: src, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
+    return;
+  }
+
+  // Con formato "original" los data: se descargan tal cual (chrome.downloads
+  // los soporta de forma nativa): cero re-codificación, máxima velocidad.
+  if (!fmt.mime && src.startsWith('data:')) {
     await chrome.downloads.download({ url: src, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
     return;
   }
@@ -243,14 +288,13 @@ async function downloadItem(tabId, item, index, { prefix, configNow, fmt, now })
     } catch {
       // Respaldo honesto: bytes originales con su extensión original.
       const cur = urlExt(src);
-      const fname = cur ? name.replace(/\.[^.]+$/, `.${cur}`) : name;
+      const fname = cur && IMG_EXT_RE.test(cur) ? name.replace(/\.[^.]+$/, `.${cur}`) : name;
       await chrome.downloads.download({ url: src, filename: `${prefix}${fname}`, conflictAction: 'uniquify' });
       return;
     }
   }
 
-  // blob: del renderer → bytes por content script recodificados en offscreen;
-  // data:/resto → conversión directa (el offscreen sí puede leerlos).
+  // blob: del renderer → bytes por content script; data:/resto → offscreen.
   let blobUrl;
   if (src.startsWith('blob:')) {
     blobUrl = await fetchRendererBlob(tabId, item.frameId, src, fmt.mime);
@@ -261,11 +305,11 @@ async function downloadItem(tabId, item, index, { prefix, configNow, fmt, now })
   await chrome.downloads.download({ url: blobUrl, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
 }
 
-async function downloadSelection(tabId, items, { folder, mime, ext, zip }) {
+async function downloadSelection(tabId, items, { folder, format, zip }) {
   const configNow = await loadConfig();
   const prefix = folder ? `${folder.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '')}/` : '';
   const now = new Date();
-  const fmt = Object.values(FORMATS).find((f) => f.ext === ext) || FORMATS.png;
+  const fmt = FORMATS[format] || FORMATS.original;
   const progress = (p) =>
     chrome.runtime.sendMessage({ type: MSG.STATE_PUSH, tabId, progress: p }).catch(() => {});
 
@@ -284,11 +328,15 @@ async function downloadSelection(tabId, items, { folder, mime, ext, zip }) {
   const failures = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i];
-    const filename = buildFilename(item, i, configNow, ext, now);
     try {
       const src = await resolveItemSrc(tabId, item);
       if (!src) throw new Error('src-unavailable');
-      resolved.push({ src, filename, mime, frameId: item.frameId ?? null });
+      resolved.push({
+        src,
+        filename: buildFilename(item, i, configNow, extFor(item, src, fmt), now),
+        mime: fmt.mime,
+        frameId: item.frameId ?? null
+      });
     } catch (e) {
       failures.push({ index: i, error: String(e?.message || e) });
     }
@@ -313,8 +361,6 @@ async function downloadSelection(tabId, items, { folder, mime, ext, zip }) {
   return { done: items.length - allFailed, failed: allFailed, errors: [...failures, ...(zipFailed || [])].slice(0, 20) };
 }
 
-chrome.runtime.onInstalled.addListener(createMenus);
-chrome.runtime.onStartup.addListener(createMenus);
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (!info.menuItemId.startsWith('pixelcatch-') || info.menuItemId === POPUP_ID) return;
@@ -363,17 +409,24 @@ chrome.commands.onCommand.addListener(async (command) => {
       errorBadge(tabId);
       return;
     }
-    const fmt = FORMATS[config.defaultFormat] || FORMATS.png;
+    const fmt = FORMATS[config.defaultFormat] || FORMATS.original;
     try {
       let src = target.src;
       if (src.startsWith('blob:')) {
         src = (await fetchRendererBlob(tabId, target.frameId ?? null, src, fmt.mime)) || null;
         if (!src) throw new Error('blob-fetch-failed');
       }
-      let blobUrl = src;
-      if (isHttp(src) || src.startsWith('data:')) {
-        ({ blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src, mime: fmt.mime }));
+      if (!fmt.mime && (isHttp(src) || src.startsWith('data:') || src.startsWith('blob:'))) {
+        // original: tal cual, sin re-codificar
+        const ext = urlExt(src) || 'png';
+        await chrome.downloads.download({
+          url: src,
+          filename: `pixelcatch-${Date.now()}.${ext}`,
+          conflictAction: 'uniquify'
+        });
+        return;
       }
+      const { blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src, mime: fmt.mime });
       await chrome.downloads.download({
         url: blobUrl,
         filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
@@ -511,11 +564,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg?.type === MSG.DOWNLOAD_SELECTED) {
     return respond(async () => {
       const tabId = msg.tabId ?? sender.tab?.id ?? (await activeTabId());
-      const fmt = FORMATS[msg.format] || FORMATS.png;
       const res = await downloadSelection(tabId, msg.items || [], {
         folder: msg.folder,
-        mime: fmt.mime,
-        ext: fmt.ext,
+        format: msg.format,
         zip: !!msg.zip
       });
       if (tabId != null && res.failed === res.done + res.failed && res.failed > 0) errorBadge(tabId);

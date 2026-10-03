@@ -22,6 +22,7 @@ Extensión Chrome MV3 que escanea las imágenes de la página cargada (sin lími
 - Las `data:` muy grandes se guardan como metadato + huella y se reconstruyen del DOM al descargar
 
 ## Descarga
+- Por defecto el formato es **Original**: sin re-codificación, los bytes salen tal cual → descarga casi instantánea. PNG/JPG/WebP/AVIF re-codifican por OffscreenCanvas.
 - Carpeta propia dentro de Descargas o raíz de Descargas
 - ZIP con progreso y reporte de fallos real
 - El formato elegido en Ajustes se respeta también en la descarga por carpeta

@@ -1,5 +1,5 @@
 const DEFAULTS = {
-    defaultFormat: 'png',
+    defaultFormat: 'original',
     minSize: 0,
     nameTemplate: '{domain}-{date}-{index}',
     detectBackgrounds: true,
