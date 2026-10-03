@@ -2,16 +2,58 @@
 <html><head><meta charset="utf-8">
 <link rel="stylesheet" href="../assets/styles/tokens.css">
 <link rel="stylesheet" href="../assets/styles/design.css">
-<style>body{width:260px}</style>
+<style>
+  body{width:720px;min-height:420px;max-height:600px;overflow-y:auto}
+</style>
 </head>
 <body>
 <div class="container">
   <div class="header">
     <img src="../../icons/brand.png" alt="">
-    <h3 style="margin:0">PixelCatch</h3>
+    <h1>PixelCatch</h1>
+    <span class="badge" id="badge">0</span>
+    <button id="options" class="btn btn-icon" title="Ajustes" data-i18n="settings">⚙</button>
   </div>
-  <button id="open" class="btn btn-primary" style="width:100%;margin-top:12px" data-i18n="openGallery">Abrir galería</button>
-  <div class="muted small" style="margin-top:8px" id="hint">Alt+Shift+B galería · Alt+Shift+S bajo cursor</div>
+
+  <div id="status" class="muted panel-status">...</div>
+
+  <div class="card panel-controls">
+    <div class="row">
+      <input id="search" class="input" data-i18n-placeholder="search" placeholder="Buscar">
+      <select id="typeFilter" class="input input-narrow">
+        <option value="all" data-i18n="all">Todos</option>
+        <option value="png">PNG</option>
+        <option value="jpg">JPG</option>
+        <option value="webp">WebP</option>
+        <option value="avif">AVIF</option>
+        <option value="gif">GIF</option>
+        <option value="unknown" data-i18n="unknown">Otros</option>
+      </select>
+      <input id="minWidth" class="input input-narrow" type="number" min="0" placeholder="px">
+    </div>
+    <div class="row">
+      <button id="selectAll" class="btn" data-i18n="selectAll">Seleccionar todo</button>
+      <button id="clearList" class="btn" data-i18n="clearList">Vaciar</button>
+      <button id="reScan" class="btn" data-i18n="rescan">Re-escanear</button>
+      <button id="scanBackgrounds" class="btn" data-i18n="backgroundScan">Fondos</button>
+    </div>
+    <div class="row">
+      <input id="folderName" class="input" data-i18n-placeholder="folderName" placeholder="Nombre carpeta">
+      <button id="downloadFolder" class="btn" data-i18n="downloadFolder">Carpeta</button>
+      <button id="downloadZip" class="btn btn-primary" data-i18n="downloadZip">ZIP</button>
+    </div>
+    <div class="row">
+      <span class="muted small" data-i18n="range">Rango</span>
+      <input id="rangeFrom" class="input input-narrow" type="number" min="1" placeholder="1">
+      <input id="rangeTo" class="input input-narrow" type="number" min="1" placeholder="10">
+      <button id="selectRange" class="btn" data-i18n="selectRange">Rango</button>
+      <button id="exportDebug" class="btn" data-i18n="exportLog">Log</button>
+      <span class="muted small" id="hint">Alt+Shift+S bajo cursor</span>
+    </div>
+    <div class="progress"><i id="progressBar"></i></div>
+  </div>
+
+  <div class="grid" id="grid"></div>
 </div>
 <script type="module" src="popup.js"></script>
 </body></html>

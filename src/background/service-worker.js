@@ -387,7 +387,8 @@ chrome.commands.onCommand.addListener(async (command) => {
 
   if (command === 'save-all-review') {
     if (tabId == null) return;
-    await chrome.sidePanel.open({ tabId }).catch(() => {});
+    // Toda la UI vive en el popup flotante: Alt+Shift+B lo abre directamente.
+    await chrome.action.openPopup().catch(() => {});
     const items = await state.getGallery(tabId);
     chrome.runtime
       .sendMessage({ type: MSG.STATE_PUSH, tabId, added: [], removed: [], clear: true, total: items.length, snapshot: items })
@@ -503,10 +504,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   if (msg?.type === MSG.OPEN_PANEL) {
     return respond(async () => {
-      const tabId = msg.tabId ?? (await activeTabId());
-      if (tabId == null) return {};
-      await chrome.sidePanel.open({ tabId }).catch(() => {});
-      return { tabId };
+      await chrome.action.openPopup().catch(() => {});
+      return { tabId: msg.tabId ?? (await activeTabId()) };
     });
   }
   if (msg?.type === MSG.DOWNLOAD_SELECTED) {

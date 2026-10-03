@@ -21,13 +21,15 @@ const files = await walk(join(root, 'src'));
 
 const manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8'));
 
-const referenced = new Set([
-  manifest.background.service_worker,
-  manifest.action.default_popup,
-  manifest.options_page,
-  manifest.side_panel.default_path,
-  ...manifest.content_scripts.flatMap((c) => c.js)
-]);
+const referenced = new Set(
+  [
+    manifest.background.service_worker,
+    manifest.action.default_popup,
+    manifest.options_page,
+    manifest.side_panel?.default_path,
+    ...manifest.content_scripts.flatMap((c) => c.js)
+  ].filter(Boolean)
+);
 
 for (const rel of referenced) {
   if (!existsSync(join(root, rel))) failures.push(`manifest referencia archivo inexistente: ${rel}`);

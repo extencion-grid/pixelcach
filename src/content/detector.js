@@ -17,7 +17,7 @@
     'src', 'srcset', 'sizes', 'poster',
     'data-src', 'data-srcset', 'data-original', 'data-lazy-src', 'data-lazy'
   ];
-  const IMG_PATH_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i;
+  const PAGE_RE = /\.(html?|php|aspx?|jsp|cfm)($|[?#])/i;
   const MAX_BATCH = 50;
   const FLUSH_DELAY = 120;
   const RETRY_DELAY = 400;
@@ -85,8 +85,8 @@
   function passesSize(width, height, src, type) {
     if (!config.minSize) return true;
     if (width > 0 && height > 0) return width >= config.minSize && height >= config.minSize;
-    // Sin dimensiones: solo pasa si la URL tiene pinta de imagen.
-    if (type === 'resource') return IMG_PATH_RE.test(src) || src.startsWith('data:image/');
+    // Sin dimensiones: aceptamos todo lo que el navegador cargó como imagen,
+    // sin filtro de extensión (el usuario pide recoger TODAS las imágenes).
     return true;
   }
 
@@ -170,8 +170,9 @@
     const anchor = el.closest?.('a[href]');
     if (!anchor) return;
     const href = anchor.href;
-    if (!href || !IMG_PATH_RE.test(href)) return;
-    if (href === el.currentSrc || href === el.src) return;
+    if (!href || href === el.currentSrc || href === el.src) return;
+    // Solo descartamos lo que claramente es una página, no una imagen.
+    if (PAGE_RE.test(href)) return;
     enqueue(href, el.naturalWidth || 0, el.naturalHeight || 0, 'original');
   }
 
