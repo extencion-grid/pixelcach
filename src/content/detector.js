@@ -18,6 +18,19 @@
     'data-src', 'data-srcset', 'data-original', 'data-lazy-src', 'data-lazy'
   ];
   const PAGE_RE = /\.(html?|php|aspx?|jsp|cfm)($|[?#])/i;
+
+  // Recorta el #fragmento: la misma imagen con distinto ancla no es otra imagen
+  // (técnica de PactInteractive/image-downloader).
+  function stripHash(url) {
+    const i = url.indexOf('#');
+    return i >= 0 ? url.slice(0, i) : url;
+  }
+
+  function toAbsolute(url) {
+    if (!url) return '';
+    if (url.startsWith('/') && !url.startsWith('//')) return location.origin + url;
+    return url;
+  }
   const MAX_BATCH = 50;
   const FLUSH_DELAY = 80;
   const RETRY_DELAY = 300;
@@ -93,6 +106,10 @@
 
   function enqueue(src, width, height, type = 'img') {
     if (!src) return false;
+    if (typeof src === 'string') {
+      if (!/^(data:|blob:|https?:|\/\/)/i.test(src)) src = toAbsolute(src);
+      src = stripHash(src);
+    }
     const isData = src.startsWith('data:');
     const hash = isData ? fnv1a(src) : '';
     const dataLength = isData ? src.length : 0;
@@ -146,11 +163,47 @@
 
     if (el.complete && width > 0) {
       enqueue(src, width, height, 'img');
+      reportAllSrcsetVariants(el, width, height);
       reportLinkOriginal(el);
       return;
     }
 
     if (src) enqueue(src, width, height, 'img');
+  }
+
+  // Todas las variantes del srcset (no solo la que eligió el navegador):
+  // el usuario pide TODAS las versiones de cada imagen.
+  function reportAllSrcsetVariants(el, width, height) {
+    const seenLocal = new Set();
+    const attrs = ['srcset', 'data-srcset'];
+    for (const attr of attrs) {
+      const v = el.getAttribute?.(attr);
+      if (!v) continue;
+      for (const part of v.split(',')) {
+        const url = part.trim().split(/\s+/)[0];
+        if (!url || seenLocal.has(url)) continue;
+        seenLocal.add(url);
+        enqueue(url, width, height, 'img');
+      }
+    }
+    for (const src of el.parentElement?.querySelectorAll?.('source[srcset]') || []) {
+      for (const part of (src.getAttribute('srcset') || '').split(',')) {
+        const url = part.trim().split(/\s+/)[0];
+        if (url && !seenLocal.has(url)) {
+          seenLocal.add(url);
+          enqueue(url, width, height, 'img');
+        }
+      }
+    }
+  }
+
+  // SVG en línea: <image> y <use> referencian recursos externos con xlink:href.
+  function reportSvgRefs(root) {
+    for (const el of root.querySelectorAll?.('image, use') || []) {
+      const href = el.getAttribute?.('xlink:href') || el.getAttribute?.('href');
+      if (!href) continue;
+      enqueue(href, el.getBoundingClientRect().width || 0, el.getBoundingClientRect().height || 0, 'img');
+    }
   }
 
   const canvasVersions = new WeakMap();
@@ -236,6 +289,7 @@
     // document (9) y ShadowRoot (11) no tienen tagName: se usa su rama de query.
     if (root.nodeType === 9 || root.nodeType === 11) {
       collect(root);
+      reportSvgRefs(root);
       root.querySelectorAll?.('*').forEach((el) => {
         if (el.shadowRoot) watchTree(el.shadowRoot);
       });
@@ -249,6 +303,11 @@
       foundCanvas = true;
     } else {
       collect(root);
+      if (root.tagName === 'IMAGE' || root.tagName === 'USE') {
+        const href = root.getAttribute?.('xlink:href') || root.getAttribute?.('href');
+        if (href) enqueue(href, 0, 0, 'img');
+      }
+      reportSvgRefs(root);
     }
 
     for (const img of root.shadowRoot?.querySelectorAll?.('img') || []) watchImage(img);
@@ -269,14 +328,20 @@
 
   function scanBackgrounds() {
     if (!config.detectBackgrounds) return;
-    const walker = document.evaluate(
-      '//*[contains(translate(@style,"ABCDEFGHIJKLMNOPQRSTUVWXYZ","abcdefghijklmnopqrstuvwxyz"),"background")]',
-      document,
-      null,
-      XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
-      null
-    );
-    for (let i = 0; i < walker.snapshotLength; i++) reportBackground(walker.snapshotItem(i));
+    // Como image-downloader: estilo computado de TODOS los elementos que
+    // pueden llevar fondo ([class] y/o [style]), no solo style inline.
+    const els = document.querySelectorAll('[class], [style]');
+    let n = 0;
+    for (const el of els) {
+      if (n++ > 4000) break; // tope de seguridad en páginas enormes
+      const bg = getComputedStyle(el).backgroundImage;
+      if (!bg || bg === 'none') continue;
+      for (const part of bg.split(',')) {
+        const m = /url\(["']?(.+?)["']?\)/.exec(part.trim());
+        if (!m || !m[1]) continue;
+        enqueue(m[1], Math.round(el.getBoundingClientRect().width), Math.round(el.getBoundingClientRect().height), 'bg');
+      }
+    }
   }
 
   function deepScan() {
