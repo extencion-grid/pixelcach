@@ -196,7 +196,17 @@
   }
 
   function watchTree(root) {
-    if (!root || root.nodeType !== 1) return;
+    if (!root) return;
+    // document (9) y ShadowRoot (11) no tienen tagName: se usa su rama de query.
+    if (root.nodeType === 9 || root.nodeType === 11) {
+      root.querySelectorAll?.('img').forEach(watchImage);
+      root.querySelectorAll?.('canvas').forEach(reportCanvas);
+      root.querySelectorAll?.('*').forEach((el) => {
+        if (el.shadowRoot) watchTree(el.shadowRoot);
+      });
+      return;
+    }
+    if (root.nodeType !== 1) return;
     if (root.tagName === 'IMG') watchImage(root);
     else if (root.tagName === 'CANVAS') reportCanvas(root);
     else {
@@ -336,8 +346,10 @@
     }
     if (msg?.type === MSG.SCAN_FULL) {
       deepScan();
-      sendResponse({ ok: true, count: seen.size });
-      return false;
+      // El IntersectionObserver resuelve de forma asíncrona: se responde
+      // tras un tick para que count refleje algo útil.
+      setTimeout(() => sendResponse({ ok: true, count: seen.size }), FLUSH_DELAY + 100);
+      return true;
     }
     if (msg?.type === MSG.SCAN_BACKGROUNDS) {
       if (msg.config) config = { ...config, ...msg.config };

@@ -104,14 +104,7 @@ document.getElementById('inject').onclick = () => {
   for (let i = 0; i < 4; i++) late.append(Object.assign(new Image(), { src: svg('#6c3483', `late ${i}`) }));
 };
 
-<script>
-// El harness no intercepta mensajes: la galería se lee desde el service
-// worker igual que en cualquier pestaña real.
-window.__pcGetState = async () => {
-  const tab = await chrome.tabs.getCurrent();
-  return chrome.runtime.sendMessage({ type: 'PC_GET_STATE', tabId: tab.id });
-};
-</script>
+document.getElementById('status').textContent = 'harness listo: ' + document.images.length + ' imgs iniciales';
 </script>
 </body>
 </html>

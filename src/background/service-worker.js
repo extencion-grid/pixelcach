@@ -17,7 +17,11 @@ const IMG_EXT_RE = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 
 let offscreenPromise = null;
 let offscreenIdleTimer = null;
-let config = await loadConfig();
+
+// Nada de top-level await: Chrome lo prohíbe en service workers (módulos
+// incluidos). config se resuelve en una promesa y todo uso la espera.
+let config = null;
+const configReady = loadConfig().then((c) => (config = c));
 
 function createMenus() {
   chrome.contextMenus.removeAll(() => {
@@ -75,6 +79,7 @@ async function activeTabId() {
 
 async function pushConfigToTab(tabId) {
   if (tabId == null) return;
+  await configReady;
   chrome.tabs.sendMessage(tabId, { type: MSG.CONFIG, config }).catch(() => {});
 }
 
@@ -352,6 +357,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 
   if (command === 'save-under-cursor') {
     if (tabId == null) return;
+    await configReady;
     const target = await findUnderCursor(tabId);
     if (!target?.src) {
       errorBadge(tabId);
@@ -478,6 +484,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const tabId = msg.tabId ?? sender.tab?.id ?? (await activeTabId());
       if (tabId == null) return {};
       await pushConfigToTab(tabId);
+      await configReady;
       const res = await chrome.tabs
         .sendMessage(tabId, { type: MSG.SCAN_BACKGROUNDS, config: { ...config, detectBackgrounds: true } })
         .catch(() => null);
@@ -547,5 +554,4 @@ chrome.runtime.onSuspend.addListener(() => {
   state.flushNow();
 });
 
-await state.hydrate();
-await pushConfigEverywhere();
+state.hydrate().then(() => configReady).then(() => pushConfigEverywhere());
