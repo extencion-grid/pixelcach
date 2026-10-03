@@ -119,7 +119,18 @@ export async function addItems(
     if (!item || !item.src) continue;
     const norm = normalize(item, frameId);
     const k = keyOf(norm);
-    if (seen.has(k)) continue;
+    if (seen.has(k)) {
+      // Misma imagen reportada de nuevo, ya con tamaño real: se actualiza.
+      if (norm.width > 0 && norm.height > 0) {
+        const prev = list.find((i) => keyOf(i) === k);
+        if (prev && (!prev.width || !prev.height)) {
+          prev.width = norm.width;
+          prev.height = norm.height;
+          scheduleFlush();
+        }
+      }
+      continue;
+    }
     seen.add(k);
     list.push(norm);
     added.push(norm);

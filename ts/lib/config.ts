@@ -10,9 +10,9 @@ export interface Config {
 
 const DEFAULTS: Config = {
   defaultFormat: 'png',
-  minSize: 150,
+  minSize: 0,
   nameTemplate: '{domain}-{date}-{index}',
-  detectBackgrounds: false,
+  detectBackgrounds: true,
   detectResources: true,
   downloadConcurrency: 4,
   debugEnabled: false

@@ -26,8 +26,9 @@
   const pendingQueue = [];
 
   let flushScheduled = false;
-  let config = { minSize: 150, detectBackgrounds: false, detectResources: true, debugEnabled: false };
+  let config = { minSize: 0, detectBackgrounds: false, detectResources: true, debugEnabled: false };
   let lastPointer = { x: 0, y: 0 };
+  let canvasSweepTimer = null;
 
   const isContextValid = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
@@ -82,11 +83,11 @@
     return src;
   }
 
-  function passesSize(width, height, src, type) {
+  function passesSize(width, height) {
     if (!config.minSize) return true;
     if (width > 0 && height > 0) return width >= config.minSize && height >= config.minSize;
-    // Sin dimensiones: aceptamos todo lo que el navegador cargó como imagen,
-    // sin filtro de extensión (el usuario pide recoger TODAS las imágenes).
+    // Sin dimensiones todavía (lazy sin cargar): entra igualmente; el filtro
+    // real de tamaño se ofrece después en la galería, no aquí.
     return true;
   }
 
@@ -152,6 +153,9 @@
     if (src) enqueue(src, width, height, 'img');
   }
 
+  const canvasVersions = new WeakMap();
+  const CANVAS_MAX_VARIANTS = 3;
+
   function reportCanvas(el) {
     const width = el.width;
     const height = el.height;
@@ -163,7 +167,27 @@
       debug('canvas_tainted', { width, height });
       return;
     }
+    const hash = fnv1a(dataUrl);
+    // Un canvas animado cambia en cada frame: máximo 3 variantes por elemento.
+    const prev = canvasVersions.get(el) || { count: 0, last: '' };
+    if (prev.last === hash || prev.count >= CANVAS_MAX_VARIANTS) return;
+    canvasVersions.set(el, { count: prev.count + 1, last: hash });
     enqueue(dataUrl, width, height, 'canvas');
+  }
+
+  // Los canvas redibujados no generan mutaciones de DOM: barrido periódico
+  // barato, solo mientras haya canvases en el documento.
+  function sweepCanvases() {
+    if (canvasSweepTimer) return;
+    canvasSweepTimer = setInterval(() => {
+      const canvases = document.querySelectorAll('canvas');
+      if (!canvases.length) {
+        clearInterval(canvasSweepTimer);
+        canvasSweepTimer = null;
+        return;
+      }
+      canvases.forEach(reportCanvas);
+    }, 4000);
   }
 
   function reportLinkOriginal(el) {
@@ -192,30 +216,43 @@
 
   function watchImage(el) {
     if (el.tagName !== 'IMG') return;
+    // Registro inmediato con lo que haya (src/srcset/picture): queremos
+    // TODAS las imágenes, no solo las que cargan o entran en viewport.
+    reportImage(el);
+    // El IO sólo re-reporta con dimensiones reales cuando carga.
     if (io) io.observe(el);
-    else reportImage(el);
   }
 
   function watchTree(root) {
     if (!root) return;
+    let foundCanvas = false;
+    const collect = (scope) => {
+      scope.querySelectorAll?.('img').forEach(watchImage);
+      scope.querySelectorAll?.('canvas').forEach((c) => {
+        reportCanvas(c);
+        foundCanvas = true;
+      });
+    };
     // document (9) y ShadowRoot (11) no tienen tagName: se usa su rama de query.
     if (root.nodeType === 9 || root.nodeType === 11) {
-      root.querySelectorAll?.('img').forEach(watchImage);
-      root.querySelectorAll?.('canvas').forEach(reportCanvas);
+      collect(root);
       root.querySelectorAll?.('*').forEach((el) => {
         if (el.shadowRoot) watchTree(el.shadowRoot);
       });
+      if (foundCanvas) sweepCanvases();
       return;
     }
     if (root.nodeType !== 1) return;
     if (root.tagName === 'IMG') watchImage(root);
-    else if (root.tagName === 'CANVAS') reportCanvas(root);
-    else {
-      root.querySelectorAll?.('img').forEach(watchImage);
-      root.querySelectorAll?.('canvas').forEach(reportCanvas);
+    else if (root.tagName === 'CANVAS') {
+      reportCanvas(root);
+      foundCanvas = true;
+    } else {
+      collect(root);
     }
 
     for (const img of root.shadowRoot?.querySelectorAll?.('img') || []) watchImage(img);
+    if (foundCanvas) sweepCanvases();
   }
 
   function reportBackground(el) {
@@ -390,6 +427,7 @@
     watchTree(document);
     observeResources();
     scanBackgrounds();
+    sweepCanvases();
     debug('content_script_init', { url: location.href });
     send({ type: MSG.DETECT_READY, url: location.href, isTop: window.top === window });
   }

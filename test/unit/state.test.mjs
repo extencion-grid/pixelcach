@@ -191,3 +191,14 @@ test('addItems asigna el frameId del sender al item', async () => {
   const { added } = await state.addItems(8, [{ src: 'https://a.test/f.png' }], 12);
   assert.equal(added[0].frameId, 12);
 });
+
+test('un re-reporte con dimensiones reales actualiza la entrada deduplicada', async () => {
+  const state = await freshState();
+  await state.addItems(4, [{ src: 'https://a.test/up.png', width: 0, height: 0 }]);
+  const second = await state.addItems(4, [{ src: 'https://a.test/up.png', width: 640, height: 480 }]);
+  assert.equal(second.added.length, 0);
+  const gal = await state.getGallery(4);
+  assert.equal(gal.length, 1);
+  assert.equal(gal[0].width, 640);
+  assert.equal(gal[0].height, 480);
+});
