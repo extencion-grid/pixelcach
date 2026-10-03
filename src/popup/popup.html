@@ -2,24 +2,20 @@
 <html><head><meta charset="utf-8">
 <link rel="stylesheet" href="../assets/styles/tokens.css">
 <link rel="stylesheet" href="../assets/styles/design.css">
-<style>
-  body{width:720px;min-height:420px;max-height:600px;overflow-y:auto}
-</style>
 </head>
-<body>
-<div class="container">
-  <div class="header">
-    <img src="../../icons/brand.png" alt="">
-    <h1>PixelCatch</h1>
+<body class="popup-body">
+<div class="app">
+  <header class="topbar">
+    <img src="../../icons/brand.png" alt="" class="brand">
+    <strong>PixelCatch</strong>
     <span class="badge" id="badge">0</span>
-    <button id="options" class="btn btn-icon" title="Ajustes" data-i18n="settings">⚙</button>
-  </div>
+    <span id="status" class="muted small topbar-status">...</span>
+    <button id="options" class="btn btn-icon" data-i18n="settings" title="Ajustes">⚙</button>
+  </header>
 
-  <div id="status" class="muted panel-status">...</div>
-
-  <div class="card panel-controls">
+  <section class="toolbar card">
     <div class="row">
-      <input id="search" class="input" data-i18n-placeholder="search" placeholder="Buscar">
+      <input id="search" class="input grow" data-i18n-placeholder="search" placeholder="Buscar">
       <select id="typeFilter" class="input input-narrow">
         <option value="all" data-i18n="all">Todos</option>
         <option value="png">PNG</option>
@@ -29,31 +25,35 @@
         <option value="gif">GIF</option>
         <option value="unknown" data-i18n="unknown">Otros</option>
       </select>
-      <input id="minWidth" class="input input-narrow" type="number" min="0" placeholder="px">
+      <input id="minWidth" class="input input-narrow" type="number" min="0" data-i18n-placeholder="minWidth" placeholder="px">
     </div>
     <div class="row">
       <button id="selectAll" class="btn" data-i18n="selectAll">Seleccionar todo</button>
-      <button id="clearList" class="btn" data-i18n="clearList">Vaciar</button>
+      <div class="range-group">
+        <input id="rangeFrom" class="input input-narrow" type="number" min="1" placeholder="1">
+        <span class="muted small">–</span>
+        <input id="rangeTo" class="input input-narrow" type="number" min="1" placeholder="10">
+        <button id="selectRange" class="btn" data-i18n="selectRange">Rango</button>
+      </div>
       <button id="reScan" class="btn" data-i18n="rescan">Re-escanear</button>
       <button id="scanBackgrounds" class="btn" data-i18n="backgroundScan">Fondos</button>
+      <button id="clearList" class="btn btn-danger" data-i18n="clearList">Vaciar</button>
     </div>
-    <div class="row">
-      <input id="folderName" class="input" data-i18n-placeholder="folderName" placeholder="Nombre carpeta">
+  </section>
+
+  <main class="gallery">
+    <div class="grid" id="grid"></div>
+  </main>
+
+  <footer class="downloadbar">
+    <div class="progress"><i id="progressBar"></i></div>
+    <div class="row no-margin">
+      <input id="folderName" class="input grow" data-i18n-placeholder="folderName" placeholder="Nombre carpeta">
       <button id="downloadFolder" class="btn" data-i18n="downloadFolder">Carpeta</button>
       <button id="downloadZip" class="btn btn-primary" data-i18n="downloadZip">ZIP</button>
+      <button id="exportDebug" class="btn btn-icon" data-i18n="exportLog" title="Exportar log">⌧</button>
     </div>
-    <div class="row">
-      <span class="muted small" data-i18n="range">Rango</span>
-      <input id="rangeFrom" class="input input-narrow" type="number" min="1" placeholder="1">
-      <input id="rangeTo" class="input input-narrow" type="number" min="1" placeholder="10">
-      <button id="selectRange" class="btn" data-i18n="selectRange">Rango</button>
-      <button id="exportDebug" class="btn" data-i18n="exportLog">Log</button>
-      <span class="muted small" id="hint">Alt+Shift+S bajo cursor</span>
-    </div>
-    <div class="progress"><i id="progressBar"></i></div>
-  </div>
-
-  <div class="grid" id="grid"></div>
+  </footer>
 </div>
 <script type="module" src="popup.js"></script>
 </body></html>

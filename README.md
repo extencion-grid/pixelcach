@@ -29,6 +29,8 @@ Extensión Chrome MV3 que escanea las imágenes de la página cargada (sin lími
 Sin telemetría. Assets desde `/home/victor/dev/logos`.
 
 ## Desarrollo
+- TS fuente en `ts/` (lib, popup, options) compilado plano a `src/` con `tsc`; SW, detector y offscreen se mantienen JS manual
+- `npm run build` — compilar TS
 - `npm run check` — rutas, sintaxis, scripts clásicos con sintaxis de módulo
 - `npm test` — tests unitarios (`node --test`) de `state`, `filename`
 - `test/harness/index.html` — página manual de humo (lazy, blob, inyección tardía)
