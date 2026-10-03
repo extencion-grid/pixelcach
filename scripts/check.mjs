@@ -65,6 +65,17 @@ for (const html of htmlFiles) {
     const target = resolve(dirname(html), ref.split('?')[0]);
     if (!existsSync(target)) failures.push(`referencia rota en ${html.replace(root + '/', '')}: ${ref}`);
   }
+
+  // Un <script> que usa import/export/await de nivel superior sin
+  // type="module" muere con SyntaxError en pleno arranque (bug del popup 0.1).
+  for (const m of src.matchAll(/<script(?![^>]*type="module")[^>]*src="([^"]+\.js)"[^>]*>/g)) {
+    const target = resolve(dirname(html), m[1]);
+    if (!existsSync(target)) continue;
+    const js = await readFile(target, 'utf8');
+    if (/^\s*(import|export)\s/m.test(js) || /^(?!.*=>).*await\s/m.test(js.replace(/\/\/[^\n]*/g, ''))) {
+      failures.push(`script clásico con sintaxis de módulo (falta type="module") en ${html.replace(root + '/', '')}: ${m[1]}`);
+    }
+  }
 }
 
 for (const dir of ['icons', 'src/assets/styles']) {

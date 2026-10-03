@@ -5,8 +5,7 @@ const DEFAULTS = {
   detectBackgrounds: false,
   detectResources: true,
   downloadConcurrency: 4,
-  debugEnabled: false,
-  uiMode: 'auto'
+  debugEnabled: false
 };
 
 export async function loadConfig() {

@@ -1,4 +1,4 @@
-import { MSG } from '../lib/messages.js';
+import { MSG, LIMITS } from '../lib/messages.js';
 import { loadConfig } from '../lib/config.js';
 import { resolveLang, t, installI18n } from '../lib/i18n.js';
 
@@ -30,22 +30,27 @@ let renderedNodes = new Map();
 let activeTabId = null;
 let config = await loadConfig();
 let filter = { q: '', minWidth: 0, type: 'all' };
+let renderOffset = 0;
+let sentinelObserver = null;
+
+const keyOfPanel = (it) =>
+  it.truncated ? `data#${it.hash}:${it.dataLength}` : it.src?.startsWith('blob:') ? `${it.src}|${it.width}x${it.height}` : it.src;
 
 function visibleItems() {
   const q = filter.q.trim().toLowerCase();
   return items.filter((it) => {
     if (filter.minWidth && (it.width || 0) < filter.minWidth) return false;
     if (filter.type !== 'all') {
-      const ext = (it.src.split('?')[0].split('.').pop() || '').toLowerCase();
-      const fromType = it.type === 'bg' || it.type === 'resource' ? 'unknown' : ext;
+      const src = it.truncated ? 'data:' : (it.src.split('?')[0].split('.').pop() || '').toLowerCase();
+      const fromType = it.type === 'bg' || it.type === 'resource' ? 'unknown' : it.truncated ? 'unknown' : src;
       if (fromType !== filter.type) return false;
     }
-    if (q && !it.src.toLowerCase().includes(q) && !(it.name || '').toLowerCase().includes(q)) return false;
+    if (q && !it.src.toLowerCase().includes(q) && !(it.url || '').toLowerCase().includes(q)) return false;
     return true;
   });
 }
 
-function makeCard(item) {
+function makeCard(item, index) {
   const card = document.createElement('div');
   card.className = 'card img-card';
 
@@ -54,26 +59,28 @@ function makeCard(item) {
   thumb.loading = 'lazy';
   thumb.decoding = 'async';
   thumb.alt = '';
-  thumb.src = item.src;
+  if (!item.truncated) thumb.src = item.src;
+  else thumb.classList.add('thumb-empty');
 
   const check = document.createElement('input');
   check.type = 'checkbox';
   check.className = 'img-check';
-  check.checked = selected.has(item.src);
+  check.checked = selected.has(keyOfPanel(item));
 
   const meta = document.createElement('div');
   meta.className = 'muted small';
-  meta.textContent = `${item.width || '?'}×${item.height || '?'}`;
+  meta.textContent = item.width && item.height ? `${item.width}×${item.height}` : '—';
 
   const idx = document.createElement('div');
   idx.className = 'muted img-index';
-  idx.textContent = `#${items.indexOf(item) + 1}`;
+  idx.textContent = `#${index + 1}`;
 
   card.append(thumb, check, meta, idx);
   card.addEventListener('click', () => {
-    if (selected.has(item.src)) selected.delete(item.src);
-    else selected.add(item.src);
-    check.checked = selected.has(item.src);
+    const k = keyOfPanel(item);
+    if (selected.has(k)) selected.delete(k);
+    else selected.add(k);
+    check.checked = selected.has(k);
     paintSelection(card, check);
     updateCounters();
   });
@@ -85,21 +92,50 @@ function paintSelection(card, check) {
   card.classList.toggle('is-selected', check.checked);
 }
 
-function renderIncremental(list) {
-  const seen = new Set();
-  for (const item of list) {
-    seen.add(item.src);
-    if (renderedNodes.has(item.src)) continue;
-    const { card, check } = makeCard(item);
+// Render por lotes: con muchas imágenes se añade un trozo y se espera al
+// scroll antes de seguir, en lugar de montar miles de nodos de golpe.
+function renderChunk() {
+  const list = visibleItems();
+  const slice = list.slice(renderOffset, renderOffset + LIMITS.VIRTUALIZE_CHUNK);
+  if (!slice.length) return;
+  for (let i = 0; i < slice.length; i++) {
+    const item = slice[i];
+    const key = keyOfPanel(item);
+    if (renderedNodes.has(key)) continue;
+    const { card, check } = makeCard(item, renderOffset + i);
     els.grid.append(card);
-    renderedNodes.set(item.src, { card, check });
+    renderedNodes.set(key, { card, check });
   }
-  for (const [src, entry] of renderedNodes) {
-    if (!seen.has(src)) {
-      entry.card.remove();
-      renderedNodes.delete(src);
+  renderOffset += slice.length;
+  bindSentinel();
+}
+
+function bindSentinel() {
+  if (sentinelObserver) sentinelObserver.disconnect();
+  const list = visibleItems();
+  if (renderOffset >= list.length) return;
+  const sentinel = document.createElement('div');
+  sentinel.className = 'sentinel';
+  els.grid.append(sentinel);
+  sentinelObserver = new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      sentinelObserver.unobserve(e.target);
+      e.target.remove();
+      renderChunk();
     }
+  });
+  sentinelObserver.observe(sentinel);
+}
+
+function applyFilters(reset = true) {
+  if (reset) {
+    renderOffset = 0;
+    els.grid.replaceChildren();
+    renderedNodes.clear();
   }
+  renderChunk();
+  updateCounters();
 }
 
 function updateCounters() {
@@ -120,6 +156,14 @@ function setBusy(busy) {
   }
 }
 
+function statusLine(res) {
+  if (!res) return t('failed', { n: 0 });
+  if (res.error === 'storage-full') return t('storageFull');
+  if (res.failed > 0 && res.done > 0) return t('partial', { ok: res.done, failed: res.failed });
+  if (res.failed > 0) return t('failed', { n: res.failed });
+  return t('done');
+}
+
 async function init() {
   await resolveLang();
   installI18n(document);
@@ -133,40 +177,56 @@ async function init() {
 
   const res = await chrome.runtime.sendMessage({ type: MSG.GET_STATE, tabId: activeTabId }).catch(() => null);
   items = res?.items || [];
-  applyFilters();
-  updateCounters();
-}
-
-function applyFilters() {
-  const list = visibleItems();
-  renderIncremental(list);
-  updateCounters();
+  applyFilters(true);
+  setProgress(0);
 }
 
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg?.type === MSG.STATE_PUSH) {
-    if (msg.tabId !== activeTabId) return;
-    if (msg.progress) {
-      setProgress(msg.progress.done / (msg.progress.total || 1));
-      els.status.textContent = t('saving', { done: msg.progress.done, total: msg.progress.total });
-      return;
-    }
-    items = msg.items || [];
-    applyFilters();
+  if (msg?.type !== MSG.STATE_PUSH || (msg.tabId != null && msg.tabId !== activeTabId)) return;
+
+  if (msg.progress) {
+    const label = msg.progress.phase === 'pack' ? t('packing') : t('saving', { done: msg.progress.done, total: msg.progress.total });
+    els.status.textContent = label;
+    setProgress(msg.progress.done / (msg.progress.total || 1));
+    return;
   }
 
-  if (msg?.type === MSG.OPEN_PANEL && msg.tabId === activeTabId) {
-    items = msg.items || [];
-    applyFilters();
+  if (msg.snapshot) {
+    items = msg.snapshot;
+    applyFilters(true);
+    return;
+  }
+  if (msg.clear) {
+    items = [];
+    selected.clear();
+    applyFilters(true);
+    return;
+  }
+  if (msg.added?.length) {
+    items.push(...msg.added);
+    applyFilters(false);
+  }
+  if (msg.removed?.length) {
+    const gone = new Set(msg.removed);
+    items = items.filter((it) => !gone.has(keyOfPanel(it)));
+    for (const k of gone) {
+      const entry = renderedNodes.get(k);
+      if (entry) {
+        entry.card.remove();
+        renderedNodes.delete(k);
+      }
+      selected.delete(k);
+    }
+    applyFilters(false);
   }
 });
 
 els.selectAll.onclick = () => {
   const list = visibleItems();
   if (selected.size === list.length) selected.clear();
-  else for (const it of list) selected.add(it.src);
-  for (const [src, entry] of renderedNodes) {
-    entry.check.checked = selected.has(src);
+  else for (const it of list) selected.add(keyOfPanel(it));
+  for (const [key, entry] of renderedNodes) {
+    entry.check.checked = selected.has(key);
     paintSelection(entry.card, entry.check);
   }
   updateCounters();
@@ -178,10 +238,10 @@ els.selectRange.onclick = () => {
   if (!from || !to || from > to) return;
   selected.clear();
   for (let i = Math.max(0, from - 1); i < Math.min(to, items.length); i++) {
-    selected.add(items[i].src);
+    selected.add(keyOfPanel(items[i]));
   }
-  for (const [src, entry] of renderedNodes) {
-    entry.check.checked = selected.has(src);
+  for (const [key, entry] of renderedNodes) {
+    entry.check.checked = selected.has(key);
     paintSelection(entry.card, entry.check);
   }
   updateCounters();
@@ -189,21 +249,21 @@ els.selectRange.onclick = () => {
 
 els.search.oninput = () => {
   filter.q = els.search.value;
-  applyFilters();
+  applyFilters(true);
 };
 
 els.minWidth.oninput = () => {
   filter.minWidth = parseInt(els.minWidth.value, 10) || 0;
-  applyFilters();
+  applyFilters(true);
 };
 
 els.typeFilter.onchange = () => {
   filter.type = els.typeFilter.value;
-  applyFilters();
+  applyFilters(true);
 };
 
 async function runDownload(zip) {
-  const chosen = items.filter((it) => selected.has(it.src));
+  const chosen = items.filter((it) => selected.has(keyOfPanel(it)));
   if (!chosen.length) {
     els.status.textContent = t('noneSelected');
     return;
@@ -221,8 +281,7 @@ async function runDownload(zip) {
       format: config.defaultFormat,
       zip
     });
-    if (res?.failed) els.status.textContent = t('failed', { n: res.failed });
-    else els.status.textContent = t('done');
+    els.status.textContent = statusLine(res);
     setProgress(1);
   } catch {
     els.status.textContent = t('failed', { n: chosen.length });
@@ -239,7 +298,7 @@ els.reScan.onclick = async () => {
   const res = await chrome.runtime.sendMessage({ type: MSG.GET_STATE, tabId: activeTabId }).catch(() => null);
   if (res?.items) {
     items = res.items;
-    applyFilters();
+    applyFilters(true);
   }
   setBusy(false);
 };
@@ -250,7 +309,7 @@ els.scanBackgrounds.onclick = async () => {
   const res = await chrome.runtime.sendMessage({ type: MSG.GET_STATE, tabId: activeTabId }).catch(() => null);
   if (res?.items) {
     items = res.items;
-    applyFilters();
+    applyFilters(true);
   }
   setBusy(false);
 };
@@ -259,7 +318,7 @@ els.clearList.onclick = async () => {
   selected.clear();
   await chrome.runtime.sendMessage({ type: MSG.CLEAR_LIST, tabId: activeTabId }).catch(() => {});
   items = [];
-  applyFilters();
+  applyFilters(true);
 };
 
 els.exportDebug.onclick = () => {

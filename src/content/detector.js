@@ -1,6 +1,8 @@
 (() => {
   'use strict';
 
+  // Copia manual de src/lib/messages.js (los content scripts no pueden
+  // importar módulos ES). Mantener sincronizado al tocar el canal.
   const MSG = {
     DETECT_BATCH: 'PC_DETECT_BATCH',
     DETECT_READY: 'PC_DETECT_READY',
@@ -15,6 +17,7 @@
     'src', 'srcset', 'sizes', 'poster',
     'data-src', 'data-srcset', 'data-original', 'data-lazy-src', 'data-lazy'
   ];
+  const IMG_PATH_RE = /\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i;
   const MAX_BATCH = 50;
   const FLUSH_DELAY = 120;
   const RETRY_DELAY = 400;
@@ -26,7 +29,7 @@
   let config = { minSize: 150, detectBackgrounds: false, detectResources: true, debugEnabled: false };
   let lastPointer = { x: 0, y: 0 };
 
-  const isContextValid = () => !!chrome?.runtime?.id;
+  const isContextValid = () => typeof chrome !== 'undefined' && !!chrome?.runtime?.id;
 
   function debug(msg, meta = {}) {
     if (!config.debugEnabled || !isContextValid()) return;
@@ -38,6 +41,16 @@
   function send(msg) {
     if (!isContextValid()) return Promise.resolve({ ok: false, reason: 'invalid-context' });
     return chrome.runtime.sendMessage(msg).catch((e) => ({ ok: false, reason: String(e) }));
+  }
+
+  // FNV-1a 32 bits: huella barata de data: URLs para dedup y resurrect.
+  function fnv1a(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h.toString(16);
   }
 
   function scheduleFlush(delay = FLUSH_DELAY) {
@@ -63,22 +76,30 @@
     if (pendingQueue.length) scheduleFlush(0);
   }
 
-  function fingerprint(src, width, height) {
-    return src.startsWith('blob:') ? `${src}|${width}x${height}` : src;
+  function fingerprint(src, width, height, hash, dataLength) {
+    if (src.startsWith('blob:')) return `${src}|${width}x${height}`;
+    if (src.startsWith('data:')) return `data#${hash}:${dataLength}`;
+    return src;
   }
 
-  function passesSize(width, height) {
+  function passesSize(width, height, src, type) {
     if (!config.minSize) return true;
-    if (!width || !height) return true;
-    return width >= config.minSize && height >= config.minSize;
+    if (width > 0 && height > 0) return width >= config.minSize && height >= config.minSize;
+    // Sin dimensiones: solo pasa si la URL tiene pinta de imagen.
+    if (type === 'resource') return IMG_PATH_RE.test(src) || src.startsWith('data:image/');
+    return true;
   }
 
   function enqueue(src, width, height, type = 'img') {
     if (!src) return false;
-    if (seen.has(fingerprint(src, width, height))) return false;
-    if (!passesSize(width, height)) return false;
-    seen.add(fingerprint(src, width, height));
-    pendingQueue.push({ src, width: width || 0, height: height || 0, url: location.href, type });
+    const isData = src.startsWith('data:');
+    const hash = isData ? fnv1a(src) : '';
+    const dataLength = isData ? src.length : 0;
+    const fp = fingerprint(src, width, height, hash, dataLength);
+    if (seen.has(fp)) return false;
+    if (!passesSize(width, height, src, type)) return false;
+    seen.add(fp);
+    pendingQueue.push({ src, width: width || 0, height: height || 0, url: location.href, type, hash, dataLength });
     scheduleFlush();
     return true;
   }
@@ -131,11 +152,25 @@
     if (src) enqueue(src, width, height, 'img');
   }
 
+  function reportCanvas(el) {
+    const width = el.width;
+    const height = el.height;
+    if (!width || !height || !passesSize(width, height)) return;
+    let dataUrl;
+    try {
+      dataUrl = el.toDataURL('image/png');
+    } catch {
+      debug('canvas_tainted', { width, height });
+      return;
+    }
+    enqueue(dataUrl, width, height, 'canvas');
+  }
+
   function reportLinkOriginal(el) {
     const anchor = el.closest?.('a[href]');
     if (!anchor) return;
     const href = anchor.href;
-    if (!href || !/\.(png|jpe?g|gif|webp|avif|bmp|svg)(\?|#|$)/i.test(href)) return;
+    if (!href || !IMG_PATH_RE.test(href)) return;
     if (href === el.currentSrc || href === el.src) return;
     enqueue(href, el.naturalWidth || 0, el.naturalHeight || 0, 'original');
   }
@@ -163,7 +198,11 @@
   function watchTree(root) {
     if (!root || root.nodeType !== 1) return;
     if (root.tagName === 'IMG') watchImage(root);
-    else root.querySelectorAll?.('img').forEach(watchImage);
+    else if (root.tagName === 'CANVAS') reportCanvas(root);
+    else {
+      root.querySelectorAll?.('img').forEach(watchImage);
+      root.querySelectorAll?.('canvas').forEach(reportCanvas);
+    }
 
     for (const img of root.shadowRoot?.querySelectorAll?.('img') || []) watchImage(img);
   }
@@ -220,7 +259,7 @@
 
   function observeResources() {
     if (!config.detectResources || typeof PerformanceObserver === 'undefined') return;
-    const wanted = new Set(['img', 'image', 'css']);
+    const wanted = new Set(['img', 'image']);
     try {
       const po = new PerformanceObserver((list) => {
         for (const entry of list.getEntries()) {
@@ -252,10 +291,41 @@
       };
     }
     if (el.tagName === 'CANVAS') {
-      return { type: 'canvas', src: '', width: el.width, height: el.height };
+      try {
+        return { type: 'canvas', src: el.toDataURL('image/png'), width: el.width, height: el.height };
+      } catch {
+        return { type: 'canvas', src: '', tainted: true, width: el.width, height: el.height };
+      }
     }
     const m = /url\(["']?(.+?)["']?\)/.exec(getComputedStyle(el).backgroundImage || '');
     return m ? { type: 'bg', src: m[1], width: el.clientWidth, height: el.clientHeight } : null;
+  }
+
+  // Localiza la imagen viva cuyo src data: coincide con la huella guardada:
+  // sirve para reconstruir el contenido que no persistimos en storage.
+  function findDataImage({ hash, dataLength, width, height }) {
+    for (const img of document.querySelectorAll('img')) {
+      const src = img.currentSrc || img.src || '';
+      if (!src.startsWith('data:')) continue;
+      if (dataLength && src.length !== dataLength) continue;
+      if (width && img.naturalWidth && img.naturalWidth !== width) continue;
+      if (height && img.naturalHeight && img.naturalHeight !== height) continue;
+      if (!hash || fnv1a(src) === hash) return src;
+    }
+    if (width && height) {
+      for (const c of document.querySelectorAll('canvas')) {
+        if (c.width !== width || c.height !== height) continue;
+        let src;
+        try {
+          src = c.toDataURL('image/png');
+        } catch {
+          continue;
+        }
+        if (dataLength && src.length !== dataLength) continue;
+        if (!hash || fnv1a(src) === hash) return src;
+      }
+    }
+    return '';
   }
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -276,6 +346,10 @@
       return false;
     }
     if (msg?.type === MSG.FETCH_BLOB) {
+      if (msg.resurrect) {
+        sendResponse({ ok: true, src: findDataImage(msg.resurrect) || null });
+        return false;
+      }
       fetch(msg.src)
         .then((r) => r.arrayBuffer())
         .then((buffer) => sendResponse({ ok: true, buffer, size: buffer.byteLength }))

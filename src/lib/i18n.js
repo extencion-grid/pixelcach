@@ -34,7 +34,9 @@ const messages = {
     debugMode: 'Modo debug',
     settings: 'Ajustes',
     hint: 'Alt+Shift+B galería · Alt+Shift+S bajo cursor',
-    backgroundScan: 'Buscar fondos (CSS)'
+    backgroundScan: 'Buscar fondos (CSS)',
+    partial: '{ok} descargadas, {failed} fallidas',
+    storageFull: 'Almacenamiento lleno: reduce la galería'
   },
   en: {
     openGallery: 'Open gallery',
@@ -71,7 +73,9 @@ const messages = {
     debugMode: 'Debug mode',
     settings: 'Settings',
     hint: 'Alt+Shift+B gallery · Alt+Shift+S under cursor',
-    backgroundScan: 'Scan CSS backgrounds'
+    backgroundScan: 'Scan CSS backgrounds',
+    partial: '{ok} downloaded, {failed} failed',
+    storageFull: 'Storage full: shorten the gallery'
   }
 };
 

@@ -1,3 +1,6 @@
+// Canal de mensajes compartido entre SW, offscreen y UIs.
+// NOTA: src/content/detector.js no puede importar (content scripts son
+// scripts clásicos); sus copias de MSG/constantes deben mantenerse a mano.
 export const MSG = {
   DETECT_BATCH: 'PC_DETECT_BATCH',
   DETECT_READY: 'PC_DETECT_READY',
@@ -9,22 +12,19 @@ export const MSG = {
   WHAT_IS_UNDER_CURSOR: 'PC_WHAT_IS_UNDER_CURSOR',
   FETCH_BLOB: 'PC_FETCH_BLOB',
   CONVERT_IMAGE: 'PC_CONVERT_IMAGE',
+  BUFFER_TO_BLOB: 'PC_BUFFER_TO_BLOB',
   GENERATE_ZIP: 'PC_GENERATE_ZIP',
+  ZIP_PROGRESS: 'PC_ZIP_PROGRESS',
   DOWNLOAD_SELECTED: 'PC_DOWNLOAD_SELECTED',
   OPEN_PANEL: 'PC_OPEN_PANEL',
   CLEAR_LIST: 'PC_CLEAR_LIST',
   EXPORT_DEBUG: 'PC_EXPORT_DEBUG'
 };
 
-export const DETECT = {
-  MAX_BATCH: 50,
-  FLUSH_DELAY_MS: 120,
-  RETRY_DELAY_MS: 400
-};
-
 export const LIMITS = {
-  MESSAGE_BYTES: 64 * 1024 * 1024,
-  DOWNLOAD_CONCURRENCY: 4,
-  VIRTUALIZE_THRESHOLD: 300,
-  OFFSCREEN_IDLE_MS: 30000
+  VIRTUALIZE_CHUNK: 300,
+  EMIT_THROTTLE_MS: 250,
+  OFFSCREEN_IDLE_MS: 30000,
+  BLOB_URL_REVOKE_MS: 60000,
+  DATA_URL_INLINE_MAX: 512
 };

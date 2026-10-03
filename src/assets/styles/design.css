@@ -137,3 +137,10 @@ h1{font-size:18px}
   height:6px;background:var(--color-border);border-radius:999px;overflow:hidden
 }
 .progress > i{display:block;height:100%;background:var(--color-accent);width:0%}
+
+.thumb-empty{
+  background:var(--color-surface);
+  display:block;
+  width:100%;aspect-ratio:1;object-fit:cover;
+}
+.sentinel{grid-column:1/-1;height:1px}

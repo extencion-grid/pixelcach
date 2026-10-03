@@ -1,5 +1,6 @@
 import { MSG, LIMITS } from '../lib/messages.js';
 import { loadConfig } from '../lib/config.js';
+import { BADGE_COLOR, BADGE_ERROR_COLOR } from '../lib/theme.js';
 import * as state from '../lib/state.js';
 import { buildFilename } from '../lib/filename.js';
 
@@ -12,6 +13,7 @@ const FORMATS = {
 
 const POPUP_ID = 'pixelcatch-root';
 const UNSAFE_NAME = /[\\/:*?"<>|]+/g;
+const IMG_EXT_RE = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 
 let offscreenPromise = null;
 let offscreenIdleTimer = null;
@@ -73,7 +75,6 @@ async function activeTabId() {
 
 async function pushConfigToTab(tabId) {
   if (tabId == null) return;
-  // Sin frameId, Chrome entrega el mensaje a todos los frames de la pestaña.
   chrome.tabs.sendMessage(tabId, { type: MSG.CONFIG, config }).catch(() => {});
 }
 
@@ -82,15 +83,47 @@ async function pushConfigEverywhere() {
   await Promise.all(tabs.map((t) => pushConfigToTab(t.id)));
 }
 
-async function emitState(tabId) {
-  const items = await state.getGallery(tabId);
-  chrome.runtime.sendMessage({ type: MSG.STATE_PUSH, tabId, items }).catch(() => {});
+// ── Emisión de deltas a la UI ────────────────────────────────────────────────
+// Antes se enviaba la galería entera en cada batch (O(n²)). Ahora se juntan
+// los deltas durante EMIT_THROTTLE_MS y se manda solo lo nuevo/borrado.
+const pendingDeltas = new Map();
+
+function queueEmit(tabId, delta) {
+  const pending = pendingDeltas.get(tabId) || { added: [], removed: [], clear: false, timer: null };
+  if (delta.added) pending.added.push(...delta.added);
+  if (delta.removed) pending.removed.push(...delta.removed);
+  if (delta.clear) pending.clear = true;
+  if (!pending.timer) {
+    pending.timer = setTimeout(() => flushEmit(tabId), LIMITS.EMIT_THROTTLE_MS);
+  }
+  pendingDeltas.set(tabId, pending);
+}
+
+async function flushEmit(tabId) {
+  const pending = pendingDeltas.get(tabId);
+  if (!pending) return;
+  pendingDeltas.delete(tabId);
+  const total = pending.clear ? 0 : (await state.getGallery(tabId)).length;
+  chrome.runtime
+    .sendMessage({
+      type: MSG.STATE_PUSH,
+      tabId,
+      added: pending.added,
+      removed: pending.removed,
+      clear: pending.clear,
+      total
+    })
+    .catch(() => {});
 }
 
 async function updateBadge(tabId, count) {
+  await chrome.action.setBadgeText({ tabId, text: count ? String(count) : '' }).catch(() => {});
+}
+
+async function errorBadge(tabId) {
   await Promise.all([
-    chrome.action.setBadgeText({ tabId, text: count ? String(count) : '' }).catch(() => {}),
-    chrome.action.setBadgeBackgroundColor({ tabId, color: '#4f8cff' }).catch(() => {})
+    chrome.action.setBadgeText({ tabId, text: '!' }).catch(() => {}),
+    chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_ERROR_COLOR }).catch(() => {})
   ]);
 }
 
@@ -98,67 +131,169 @@ async function handleBatch(sender, items) {
   const tabId = sender.tab?.id;
   if (tabId == null || !items?.length) return { ok: true };
 
-  const { changed, list } = await state.addItems(tabId, items);
-  if (changed) {
-    await updateBadge(tabId, list.length);
-    await emitState(tabId);
+  const { added, total } = await state.addItems(tabId, items, sender.frameId ?? null);
+  if (added.length) {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR }).catch(() => {});
+    await updateBadge(tabId, total);
+    queueEmit(tabId, { added });
   }
-  return { ok: true, count: list.length };
+  return { ok: true, count: total };
 }
 
-async function downloadWithQueue(entries, concurrency, onProgress) {
-  let cursor = 0;
-  let done = 0;
-  const failed = [];
+// ── Resolución de orígenes ───────────────────────────────────────────────────
+// Un item puede llegar como: URL http(s) directa, data: truncada (hay que
+// reconstruirla pidiéndola al frame vivo) o blob: del renderer (hay que
+// traerse los bytes porque ni el SW ni el offscreen pueden leerla).
+async function resolveItemSrc(tabId, item) {
+  if (!item.truncated) return item.src || null;
+  const frameId = item.frameId ?? 0;
+  const res = await chrome.tabs
+    .sendMessage(tabId, { type: MSG.FETCH_BLOB, resurrect: { hash: item.hash, dataLength: item.dataLength, width: item.width, height: item.height } }, { frameId })
+    .catch(() => null);
+  return res?.ok && res.src ? res.src : null;
+}
 
-  async function worker() {
-    await new Promise((r) => setTimeout(r, cursor * 12));
-    while (cursor < entries.length) {
-      const entry = entries[cursor++];
+function urlExt(src) {
+  try {
+    const u = new URL(src);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    return (u.pathname.split('.').pop() || '').toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
+function isHttp(src) {
+  return /^https?:/i.test(src);
+}
+
+// Descarga directa solo si es http(s) y el formato pedido coincide con el
+// original; en otro caso hay que convertir para no mentir con la extensión.
+function canDirectDownload(src, ext) {
+  if (!isHttp(src)) return false;
+  const cur = urlExt(src);
+  if (!IMG_EXT_RE.test(cur)) return false;
+  return (cur === 'jpeg' ? 'jpg' : cur) === ext;
+}
+
+// Convierte vía offscreen y devuelve blobUrl del origen de la extensión,
+// apto para chrome.downloads.
+async function convertToBlobUrl(src, mime) {
+  const { blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src, mime });
+  return blobUrl;
+}
+
+// Trae un blob: del renderer: el content script hace fetch (el renderer sí
+// puede leer sus propios blobs) y el offscreen lo re-aloja como blob URL.
+async function fetchRendererBlob(tabId, frameId, src, mime) {
+  const res = await chrome.tabs
+    .sendMessage(tabId, { type: MSG.FETCH_BLOB, src }, frameId != null ? { frameId } : undefined)
+    .catch(() => null);
+  if (!res?.ok || !res.buffer) return null;
+  try {
+    const { blobUrl } = await callOffscreen({ type: MSG.BUFFER_TO_BLOB, buffer: res.buffer, mime });
+    return blobUrl;
+  } catch {
+    return null;
+  }
+}
+
+// ── Descargas ────────────────────────────────────────────────────────────────
+async function runPool(items, concurrency, task, onProgress) {
+  let cursor = 0;
+  const failures = [];
+
+  async function worker(i) {
+    await new Promise((r) => setTimeout(r, i * 12));
+    while (cursor < items.length) {
+      const index = cursor++;
       try {
-        await chrome.downloads.download({ ...entry, conflictAction: 'uniquify' });
-        done++;
-      } catch {
-        failed.push(entry.filename);
+        await task(items[index], index);
+      } catch (e) {
+        failures.push({ index, error: String(e?.message || e) });
       }
-      onProgress?.({ done, total: entries.length, failed: failed.length });
+      onProgress?.({ done: cursor, total: items.length, failed: failures.length });
     }
   }
 
-  await Promise.all(Array.from({ length: Math.min(concurrency, entries.length) }, worker));
-  return { done, failed };
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, (_, i) => worker(i)));
+  return { done: items.length - failures.length, failures };
 }
 
-async function resolveBlobFromTab(tabId, src) {
-  const buffer = await chrome.tabs
-    .sendMessage(tabId, { type: MSG.FETCH_BLOB, src })
-    .catch(() => null);
-  if (!buffer?.ok || !buffer.buffer) return null;
-  return URL.createObjectURL(new Blob([buffer.buffer]));
+async function downloadItem(tabId, item, index, { prefix, configNow, fmt, now }) {
+  const name = buildFilename(item, index, configNow, fmt.ext, now);
+  const src = await resolveItemSrc(tabId, item);
+  if (!src) throw new Error('src-unavailable');
+
+  if (canDirectDownload(src, fmt.ext)) {
+    await chrome.downloads.download({ url: src, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
+    return;
+  }
+
+  if (isHttp(src)) {
+    try {
+      const blobUrl = await convertToBlobUrl(src, fmt.mime);
+      await chrome.downloads.download({ url: blobUrl, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
+      return;
+    } catch {
+      // Respaldo honesto: bytes originales con su extensión original.
+      const cur = urlExt(src);
+      const fname = cur ? name.replace(/\.[^.]+$/, `.${cur}`) : name;
+      await chrome.downloads.download({ url: src, filename: `${prefix}${fname}`, conflictAction: 'uniquify' });
+      return;
+    }
+  }
+
+  // blob: del renderer → bytes por content script recodificados en offscreen;
+  // data:/resto → conversión directa (el offscreen sí puede leerlos).
+  let blobUrl;
+  if (src.startsWith('blob:')) {
+    blobUrl = await fetchRendererBlob(tabId, item.frameId, src, fmt.mime);
+    if (!blobUrl) throw new Error('blob-fetch-failed');
+  } else {
+    blobUrl = await convertToBlobUrl(src, fmt.mime);
+  }
+  await chrome.downloads.download({ url: blobUrl, filename: `${prefix}${name}`, conflictAction: 'uniquify' });
 }
 
 async function downloadSelection(tabId, items, { folder, mime, ext, zip }) {
   const configNow = await loadConfig();
   const prefix = folder ? `${folder.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '')}/` : '';
   const now = new Date();
-  const entries = items.map((item, i) => ({
-    url: item.src,
-    filename: `${prefix}${buildFilename(item, i, configNow, ext, now)}`
-  }));
+  const fmt = Object.values(FORMATS).find((f) => f.ext === ext) || FORMATS.png;
+  const progress = (p) =>
+    chrome.runtime.sendMessage({ type: MSG.STATE_PUSH, tabId, progress: p }).catch(() => {});
 
   if (!zip) {
-    return downloadWithQueue(entries, configNow.downloadConcurrency, (p) =>
-      chrome.runtime.sendMessage({ type: MSG.STATE_PUSH, tabId, progress: p }).catch(() => {})
+    const { done, failures } = await runPool(
+      items,
+      configNow.downloadConcurrency,
+      (item, i) => downloadItem(tabId, item, i, { prefix, configNow, fmt, now }),
+      progress
     );
+    return { done, failed: failures.length, errors: failures.slice(0, 20) };
   }
 
-  const { blobUrl, filename } = await callOffscreen({
+  // ZIP: mismo resolve por item, pero empaquetado en el offscreen.
+  const resolved = [];
+  const failures = [];
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const filename = buildFilename(item, i, configNow, ext, now);
+    try {
+      const src = await resolveItemSrc(tabId, item);
+      if (!src) throw new Error('src-unavailable');
+      resolved.push({ src, filename, mime, frameId: item.frameId ?? null });
+    } catch (e) {
+      failures.push({ index: i, error: String(e?.message || e) });
+    }
+    progress({ done: i + 1, total: items.length, failed: failures.length, phase: 'resolve' });
+  }
+
+  const { blobUrl, filename, failed: zipFailed } = await callOffscreen({
     type: MSG.GENERATE_ZIP,
-    items: items.map((item, i) => ({
-      src: item.src,
-      filename: buildFilename(item, i, configNow, ext, now),
-      mime
-    })),
+    tabId,
+    items: resolved,
     folderName: folder,
     zipName: (folder || 'pixelcatch').replace(UNSAFE_NAME, '-')
   });
@@ -168,55 +303,78 @@ async function downloadSelection(tabId, items, { folder, mime, ext, zip }) {
     filename: filename.endsWith('.zip') ? filename : `${filename}.zip`,
     conflictAction: 'uniquify'
   });
-  return { done: items.length, failed: 0 };
+
+  const allFailed = failures.length + (zipFailed?.length || 0);
+  return { done: items.length - allFailed, failed: allFailed, errors: [...failures, ...(zipFailed || [])].slice(0, 20) };
 }
 
 chrome.runtime.onInstalled.addListener(createMenus);
 chrome.runtime.onStartup.addListener(createMenus);
 
-chrome.contextMenus.onClicked.addListener(async (info) => {
-  if (!info.menuItemId.startsWith('pixelcatch-')) return;
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (!info.menuItemId.startsWith('pixelcatch-') || info.menuItemId === POPUP_ID) return;
   const fmt = FORMATS[info.menuItemId.replace('pixelcatch-', '')];
   if (!fmt) return;
 
-  try {
-    const { blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src: info.srcUrl, mime: fmt.mime });
-    await chrome.downloads.download({
-      url: blobUrl,
-      filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
-      conflictAction: 'uniquify'
-    });
-  } catch {
-    await chrome.downloads.download({
-      url: info.srcUrl,
-      filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
-      conflictAction: 'uniquify'
-    });
+  let src = info.srcUrl;
+  // blob: dentro de una página: el menú contextual da la URL pero solo el
+  // renderer puede leerla; pedimos los bytes ya recodificados al formato.
+  if (src?.startsWith('blob:') && tab?.id != null) {
+    src = await fetchRendererBlob(tab.id, info.frameId ?? null, src, fmt.mime);
+  }
+  if (src) {
+    try {
+      let blobUrl = src;
+      if (isHttp(src) || src.startsWith('data:')) {
+        ({ blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src, mime: fmt.mime }));
+      }
+      await chrome.downloads.download({
+        url: blobUrl,
+        filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
+        conflictAction: 'uniquify'
+      });
+      return;
+    } catch {
+      /* sigue el respaldo */
+    }
+  }
+  if (tab?.id != null) errorBadge(tab.id);
+  if (info.srcUrl && isHttp(info.srcUrl)) {
+    await chrome.downloads
+      .download({ url: info.srcUrl, conflictAction: 'uniquify' })
+      .catch(() => {});
   }
 });
 
+// Imagen bajo el cursor: recorre los frames hasta encontrar el que la tiene.
 chrome.commands.onCommand.addListener(async (command) => {
   const tabId = await activeTabId();
 
   if (command === 'save-under-cursor') {
     if (tabId == null) return;
-    const target = await chrome.tabs.sendMessage(tabId, { type: MSG.WHAT_IS_UNDER_CURSOR }).catch(() => null);
-    if (!target?.src) return;
+    const target = await findUnderCursor(tabId);
+    if (!target?.src) {
+      errorBadge(tabId);
+      return;
+    }
     const fmt = FORMATS[config.defaultFormat] || FORMATS.png;
     try {
-      const { blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src: target.src, mime: fmt.mime });
+      let src = target.src;
+      if (src.startsWith('blob:')) {
+        src = (await fetchRendererBlob(tabId, target.frameId ?? null, src, fmt.mime)) || null;
+        if (!src) throw new Error('blob-fetch-failed');
+      }
+      let blobUrl = src;
+      if (isHttp(src) || src.startsWith('data:')) {
+        ({ blobUrl } = await callOffscreen({ type: MSG.CONVERT_IMAGE, src, mime: fmt.mime }));
+      }
       await chrome.downloads.download({
         url: blobUrl,
         filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
         conflictAction: 'uniquify'
       });
     } catch {
-      const blobUrl = await resolveBlobFromTab(tabId, target.src);
-      await chrome.downloads.download({
-        url: blobUrl || target.src,
-        filename: `pixelcatch-${Date.now()}.${fmt.ext}`,
-        conflictAction: 'uniquify'
-      });
+      errorBadge(tabId);
     }
     return;
   }
@@ -225,9 +383,26 @@ chrome.commands.onCommand.addListener(async (command) => {
     if (tabId == null) return;
     await chrome.sidePanel.open({ tabId }).catch(() => {});
     const items = await state.getGallery(tabId);
-    chrome.runtime.sendMessage({ type: MSG.OPEN_PANEL, tabId, items }).catch(() => {});
+    chrome.runtime
+      .sendMessage({ type: MSG.STATE_PUSH, tabId, added: [], removed: [], clear: true, total: items.length, snapshot: items })
+      .catch(() => {});
   }
 });
+
+async function findUnderCursor(tabId) {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  if (frames?.length) {
+    for (const frame of frames) {
+      if (frame.errorOccurred) continue;
+      const res = await chrome.tabs
+        .sendMessage(tabId, { type: MSG.WHAT_IS_UNDER_CURSOR }, { frameId: frame.frameId })
+        .catch(() => null);
+      if (res?.src) return { ...res, frameId: frame.frameId };
+    }
+    return null;
+  }
+  return chrome.tabs.sendMessage(tabId, { type: MSG.WHAT_IS_UNDER_CURSOR }).catch(() => null);
+}
 
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== 'sync') return;
@@ -237,17 +412,30 @@ chrome.storage.onChanged.addListener((changes, area) => {
   });
 });
 
-chrome.tabs.onRemoved.addListener(async (tabId) => {
-  await state.dropTab(tabId);
-  await updateBadge(tabId, 0).catch(() => {});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  state.dropTab(tabId);
 });
 
-chrome.tabs.onUpdated.addListener(async (tabId, info) => {
-  if (info.status === 'loading') {
-    await state.clearTab(tabId);
-    await updateBadge(tabId, 0);
-    emitState(tabId);
-  }
+// Solo la navegación del frame principal vacía la galería. Con iframes de
+// terceros (Perchance) los subframes navegan constantemente y borraban todo.
+chrome.webNavigation.onBeforeNavigate.addListener((details) => {
+  if (details.frameId !== 0 || details.tabId < 0) return;
+  const tabId = details.tabId;
+  state.clearTab(tabId).then(() => {
+    queueEmit(tabId, { clear: true, added: [], removed: [] });
+    updateBadge(tabId, 0);
+  });
+});
+
+state.onStorageError((e) => {
+  chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
+    if (tab?.id != null) {
+      errorBadge(tab.id);
+      chrome.runtime
+        .sendMessage({ type: MSG.STATE_PUSH, tabId: tab.id, error: 'storage-full' })
+        .catch(() => {});
+    }
+  });
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -267,8 +455,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return respond(async () => {
       const tabId = sender.tab?.id;
       if (tabId == null) return {};
-      await pushConfigToTab(tabId);
-      await emitState(tabId);
+      if (sender.frameId === 0) await pushConfigToTab(tabId);
       return { tabId };
     });
   }
@@ -281,6 +468,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (tabId == null) return { tabId: null, items: [] };
       chrome.tabs.sendMessage(tabId, { type: MSG.SCAN_FULL }).catch(() => {});
       const items = await state.getGallery(tabId);
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR }).catch(() => {});
       await updateBadge(tabId, items.length);
       return { tabId, items };
     });
@@ -302,20 +490,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (tabId == null) return {};
       await state.clearTab(tabId);
       await updateBadge(tabId, 0);
-      await emitState(tabId);
+      queueEmit(tabId, { clear: true, added: [], removed: [] });
       return { tabId };
-    });
-  }
-  if (msg?.type === MSG.DOWNLOAD_SELECTED) {
-    return respond(async () => {
-      const tabId = msg.tabId ?? sender.tab?.id ?? (await activeTabId());
-      const fmt = FORMATS[msg.format] || FORMATS.png;
-      return downloadSelection(tabId, msg.items || [], {
-        folder: msg.folder,
-        mime: fmt.mime,
-        ext: fmt.ext,
-        zip: !!msg.zip
-      });
     });
   }
   if (msg?.type === MSG.OPEN_PANEL) {
@@ -324,6 +500,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (tabId == null) return {};
       await chrome.sidePanel.open({ tabId }).catch(() => {});
       return { tabId };
+    });
+  }
+  if (msg?.type === MSG.DOWNLOAD_SELECTED) {
+    return respond(async () => {
+      const tabId = msg.tabId ?? sender.tab?.id ?? (await activeTabId());
+      const fmt = FORMATS[msg.format] || FORMATS.png;
+      const res = await downloadSelection(tabId, msg.items || [], {
+        folder: msg.folder,
+        mime: fmt.mime,
+        ext: fmt.ext,
+        zip: !!msg.zip
+      });
+      if (tabId != null && res.failed === res.done + res.failed && res.failed > 0) errorBadge(tabId);
+      return res;
     });
   }
   if (msg?.type === 'PC_DEBUG_LOG') {
@@ -338,9 +528,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       const text = entries
         .map((e) => `[${new Date(e.t).toISOString()}] ${e.msg} ${JSON.stringify(e.meta || {})} ${e.frame || ''}`)
         .join('\n');
-      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+      const { blobUrl } = await callOffscreen({ type: MSG.BUFFER_TO_BLOB, buffer: new TextEncoder().encode(text).buffer });
       await chrome.downloads.download({
-        url,
+        url: blobUrl,
         filename: `pixelcatch-debug-${msg.tabId ?? 'tab'}-${Date.now()}.txt`,
         conflictAction: 'uniquify'
       });

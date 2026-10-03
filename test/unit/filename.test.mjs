@@ -61,3 +61,25 @@ test('cae a un nombre por defecto cuando falta el nombre', () => {
 test('los tokens desconocidos se sustituyen por cadena vacía', () => {
   assert.equal(buildName(item, 0, { nameTemplate: 'x{nope}y' }, now), 'xy');
 });
+
+test('una data: URL cae al nombre generico sin reventar', () => {
+  const out = buildName({ src: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==', url: 'https://a.test' }, 0, { nameTemplate: '{name}' }, now);
+  assert.equal(out, 'image');
+});
+
+test('una blob: URL cae al nombre generico', () => {
+  const out = buildName({ src: 'blob:https://a.test/9f1d-uuid', url: 'https://a.test' }, 0, { nameTemplate: '{name}' }, now);
+  assert.equal(out, 'image');
+});
+
+test('la plantilla {width}x{height} separada funciona como token doble', () => {
+  const sized = { src: 'https://a.test/q.png', url: 'https://a.test', width: 800, height: 600 };
+  assert.equal(buildName(sized, 0, { nameTemplate: '{width}x{height}' }, now), '800x600');
+});
+
+test('item truncado con data: no deja ningun prefijo base64 en el nombre', () => {
+  const truncated = { src: 'data:image/png;base64,'.padEnd(60, 'A'), url: 'https://a.test', truncated: true, hash: 'abc' };
+  const out = buildFilename(truncated, 0, { nameTemplate: '{name}-{index}' }, 'jpg', now);
+  assert.doesNotMatch(out, /AAAA/);
+  assert.ok(out.endsWith('.jpg'));
+});
