@@ -2,7 +2,7 @@ import { MSG, LIMITS } from '../lib/messages.js';
 import { loadConfig } from '../lib/config.js';
 import { BADGE_COLOR, BADGE_ERROR_COLOR } from '../lib/theme.js';
 import * as state from '../lib/state.js';
-import { buildFilename } from '../lib/filename.js';
+import { buildFilename, sanitizeFolderPath, sanitizeFilename } from '../lib/filename.js';
 
 const FORMATS = {
   original: { id: 'original', title: 'Original', mime: null, ext: null },
@@ -14,7 +14,6 @@ const FORMATS = {
 const MENU_FORMATS = ['png', 'jpg', 'webp', 'avif'];
 
 const POPUP_ID = 'pixelcatch-root';
-const UNSAFE_NAME = /[\\/:*?"<>|]+/g;
 const IMG_EXT_RE = /^(png|jpe?g|gif|webp|avif|bmp|svg)$/i;
 
 let offscreenPromise = null;
@@ -307,7 +306,8 @@ async function downloadItem(tabId, item, index, { prefix, configNow, fmt, now })
 
 async function downloadSelection(tabId, items, { folder, format, zip }) {
   const configNow = await loadConfig();
-  const prefix = folder ? `${folder.replace(/[\\/]+/g, '/').replace(/^\/+|\/+$/g, '')}/` : '';
+  const cleanFolder = sanitizeFolderPath(folder || '');
+  const prefix = cleanFolder ? `${cleanFolder}/` : '';
   const now = new Date();
   const fmt = FORMATS[format] || FORMATS.original;
   const progress = (p) =>
@@ -347,8 +347,8 @@ async function downloadSelection(tabId, items, { folder, format, zip }) {
     type: MSG.GENERATE_ZIP,
     tabId,
     items: resolved,
-    folderName: folder,
-    zipName: (folder || 'pixelcatch').replace(UNSAFE_NAME, '-')
+    folderName: cleanFolder,
+    zipName: sanitizeFilename(cleanFolder.replace(/\//g, '-') || 'pixelcatch')
   });
 
   await chrome.downloads.download({

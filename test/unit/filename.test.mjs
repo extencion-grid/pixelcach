@@ -83,3 +83,33 @@ test('item truncado con data: no deja ningun prefijo base64 en el nombre', () =>
   assert.doesNotMatch(out, /AAAA/);
   assert.ok(out.endsWith('.jpg'));
 });
+
+test('nombres reservados de Windows se prefijan', () => {
+  const out = buildFilename({ src: 'https://a.test/CON.jpg', url: 'https://a.test' }, 0, { nameTemplate: '{name}' }, 'png', now);
+  assert.ok(out.startsWith('_'), out);
+  assert.ok(out.endsWith('.png'));
+});
+
+test('sin puntos ni espacios al final (Windows los rechaza)', () => {
+  const out = buildName({ src: 'https://a.test/x.png', url: 'https://a.test' }, 0, { nameTemplate: '  {name}..   ' }, now);
+  assert.doesNotMatch(out, /[.\s]$/);
+});
+
+test('sin caracteres de control ni barra invertida', () => {
+  const out = buildName({ src: 'https://a.test/x.png', url: 'https://a.test' }, 0, { nameTemplate: 'a\b\\c:d*e?"f<g>h|i' }, now);
+  assert.ok(!/[\\/:*?"<>|]/.test(out));
+  assert.ok(!/[\u0000-\u001f\u007f]/.test(out));
+});
+
+test('nunca devuelve cadena vacía', () => {
+  const out = buildName({ src: 'https://a.test/x.png', url: 'https://a.test' }, 0, { nameTemplate: '{nope}-..  ' }, now);
+  assert.ok(out.length > 0);
+  assert.ok(!/^[.\s-]+$/.test(out));
+});
+
+test('sanitizeFolderPath quita traversal y segmentos prohibidos', async () => {
+  const { sanitizeFolderPath } = await import('../../src/lib/filename.js');
+  assert.equal(sanitizeFolderPath('..\\con\\a/b'), '_con/a/b'.replace('_con', '_con'));
+  assert.equal(sanitizeFolderPath('/fotos//verano/'), 'fotos/verano');
+  assert.equal(sanitizeFolderPath('..'), '');
+});

@@ -1,6 +1,36 @@
 import { extractDomain } from './config.js';
 
-const UNSAFE = /[\\/:*?"<>|]+/g;
+// Saneo total para Windows/macOS/Linux:
+//  - prohibidos: \ / : * ? " < > |  y controles \0-\x1f \x7f
+//  - sin espacios ni puntos al final (Windows los rechaza)
+//  - nombres de dispositivo DOS reservados (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+//  - sin punto inicial (oculto en POSIX), sin '..' (traversal)
+//  - longitud: base ≤ 100 glifos (el límite real es 255 *bytes* de nombre)
+// Prohibidos en nombres de fichero: \\ / : * ? " < > | y controles.
+// (Construido con charCodes para no tener nunca un carácter literal en la fuente.)
+const BANNED = new Set([0x5c, 0x2f, 0x3a, 0x2a, 0x3f, 0x22, 0x3c, 0x3e, 0x7c, 0x7f, ...Array.from({ length: 32 }, (_, i) => i)]);
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+const MAX_BASE = 100;
+
+function stripBanned(s: string): string {
+  let out = '';
+  for (const ch of s) {
+    out += BANNED.has(ch.codePointAt(0) || 0) ? '-' : ch;
+  }
+  return out;
+}
+
+export function sanitizeFilename(name: string, fallback = 'image'): string {
+  let out = stripBanned(name);
+  out = out.replace(/^\.+$/, '');
+  out = out.replace(/\.+$/, '').replace(/\s+$/, '');
+  out = out.replace(/\s+/g, ' ').replace(/-+/g, '-').trim();
+  out = out.replace(/^[-. ]+|[-. ]+$/g, '');
+  if (!out) out = fallback;
+  if (RESERVED.test(out)) out = `_${out}`;
+  if (out.length > MAX_BASE) out = out.slice(0, MAX_BASE).replace(/[.\s-]+$/, '');
+  return out || fallback;
+}
 
 function pad(n: number, width = 2): string {
   return String(n).padStart(width, '0');
@@ -27,7 +57,7 @@ function baseName(src: string): string {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return 'image';
     const last = url.pathname.split('/').filter(Boolean).pop();
     if (!last) return 'image';
-    return decodeURIComponent(last).replace(UNSAFE, '').replace(/\.[a-z0-9]+$/i, '') || 'image';
+    return decodeURIComponent(last).replace(/\.[a-z0-9]+$/i, '') || 'image';
   } catch {
     return 'image';
   }
@@ -44,7 +74,7 @@ export interface NameItem {
 export function buildName(item: NameItem, index: number, config?: { nameTemplate?: string }, now = new Date()): string {
   const template = config?.nameTemplate || '{domain}-{date}-{index}';
   const values: Record<string, string | number> = {
-    name: item.name || baseName(item.src),
+    name: sanitizeFilename(item.name || baseName(item.src)),
     domain: extractDomain(item.url || ''),
     date: stamp(now, 'YYYY-MM-DD'),
     time: stamp(now, 'HH-mm-ss'),
@@ -59,7 +89,9 @@ export function buildName(item: NameItem, index: number, config?: { nameTemplate
     return String(values[key] ?? '');
   });
 
-  out = out.replace(/\s+/g, ' ').trim().replace(UNSAFE, '-');
+  out = stripBanned(out.replace(/\s+/g, ' ').trim()).replace(/[.\s-]+$/, '');
+  if (RESERVED.test(out)) out = `_${out}`;
+  if (out.length > MAX_BASE) out = out.slice(0, MAX_BASE).replace(/[.\s-]+$/, '');
   return out || `image-${pad(index + 1, 3)}`;
 }
 
@@ -67,5 +99,17 @@ export function buildFilename(item: NameItem, index: number, config?: { nameTemp
   const name = buildName(item, index, config, now);
   const dot = name.lastIndexOf('.');
   const clean = dot > 0 ? name.slice(0, dot) : name;
-  return `${clean}.${ext}`;
+  const safeExt = sanitizeFilename(ext.replace(/^\.+/, ''), 'png').toLowerCase();
+  return `${clean}.${safeExt}`;
+}
+
+// Sanea una ruta de carpeta (segmento a segmento) para chrome.downloads/ZIP:
+// se descartan '.' y '..' (traversal) y los segmentos vacíos.
+export function sanitizeFolderPath(input: string): string {
+  return input
+    .split(/[\\/]+/)
+    .map((seg) => seg.trim())
+    .filter((seg) => seg && seg !== '.' && seg !== '..')
+    .map((seg) => sanitizeFilename(seg, 'folder'))
+    .join('/');
 }
