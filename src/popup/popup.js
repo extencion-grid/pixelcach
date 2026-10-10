@@ -14,22 +14,40 @@ const els = {
     reScan: $('reScan'),
     clearList: $('clearList'),
     progressBar: $('progressBar'),
-    options: $('options')
+    options: $('options'),
+    typeFilter: $('typeFilter'),
+    minWidth: $('minWidth'),
+    minHeight: $('minHeight'),
+    clearFilters: $('clearFilters'),
+    emptyState: $('emptyState'),
+    emptyText: $('emptyText'),
+    tabGallery: $('tabGallery'),
+    tabDownload: $('tabDownload'),
+    viewGallery: $('viewGallery'),
+    viewDownload: $('viewDownload')
 };
 let items = [];
 let selected = new Set();
 let renderedNodes = new Map();
 let activeTabId = null;
 const config = await loadConfig();
-const filter = { q: '' };
+const filter = { q: '', type: '', minW: 0, minH: 0 };
 let renderOffset = 0;
 let sentinelObserver = null;
 const keyOfPanel = (it) => it.truncated ? `data#${it.hash}:${it.dataLength}` : it.src?.startsWith('blob:') ? `${it.src}|${it.width}x${it.height}` : it.src;
 function visibleItems() {
     const q = filter.q.trim().toLowerCase();
-    if (!q)
-        return items;
-    return items.filter((it) => it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q));
+    return items.filter((it) => {
+        if (filter.type && it.type !== filter.type)
+            return false;
+        if (filter.minW && (it.width || 0) < filter.minW)
+            return false;
+        if (filter.minH && (it.height || 0) < filter.minH)
+            return false;
+        if (q && !(it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q)))
+            return false;
+        return true;
+    });
 }
 function makeCard(item, index) {
     const card = document.createElement('div');
@@ -44,6 +62,10 @@ function makeCard(item, index) {
         thumb.src = item.src;
     else
         thumb.classList.add('thumb-empty');
+    thumb.addEventListener('error', () => {
+        thumb.classList.add('thumb-broken');
+        thumb.title = t('broken');
+    }, { once: true });
     const check = document.createElement('input');
     check.type = 'checkbox';
     check.className = 'img-check';
@@ -129,8 +151,23 @@ function updateCounters() {
     const total = items.length;
     const chosen = selected.size;
     els.badge.textContent = String(total);
-    els.status.textContent = total ? t('detected', { n: total }) : t('loading');
+    els.status.textContent = t('detected', { n: total });
     els.selectAll.textContent = chosen === total && total > 0 ? t('deselectAll') : t('selectAll');
+    updateEmptyState(total);
+}
+function updateEmptyState(total) {
+    const visible = visibleItems().length;
+    if (total === 0) {
+        els.emptyText.textContent = t('empty');
+        els.emptyState.hidden = false;
+    }
+    else if (visible === 0) {
+        els.emptyText.textContent = t('noResults');
+        els.emptyState.hidden = false;
+    }
+    else {
+        els.emptyState.hidden = true;
+    }
 }
 function setProgress(ratio) {
     els.progressBar.style.width = `${Math.round(Math.max(0, Math.min(1, ratio)) * 100)}%`;
@@ -229,6 +266,29 @@ els.search.oninput = () => {
     filter.q = els.search.value;
     applyFilters(true);
 };
+els.typeFilter.onchange = () => {
+    filter.type = els.typeFilter.value;
+    applyFilters(true);
+};
+els.minWidth.oninput = () => {
+    filter.minW = Number(els.minWidth.value) || 0;
+    applyFilters(true);
+};
+els.minHeight.oninput = () => {
+    filter.minH = Number(els.minHeight.value) || 0;
+    applyFilters(true);
+};
+els.clearFilters.onclick = () => {
+    els.typeFilter.value = '';
+    els.minWidth.value = '';
+    els.minHeight.value = '';
+    els.search.value = '';
+    filter.q = '';
+    filter.type = '';
+    filter.minW = 0;
+    filter.minH = 0;
+    applyFilters(true);
+};
 async function runDownload(zip) {
     const chosen = items.filter((it) => selected.has(keyOfPanel(it)));
     if (!chosen.length) {
@@ -279,4 +339,15 @@ els.clearList.onclick = async () => {
 els.options.onclick = () => {
     chrome.runtime.openOptionsPage();
 };
+function switchTab(which) {
+    const isGallery = which === 'gallery';
+    els.viewGallery.hidden = !isGallery;
+    els.viewDownload.hidden = isGallery;
+    els.tabGallery.classList.toggle('active', isGallery);
+    els.tabDownload.classList.toggle('active', !isGallery);
+    els.tabGallery.setAttribute('aria-selected', String(isGallery));
+    els.tabDownload.setAttribute('aria-selected', String(!isGallery));
+}
+els.tabGallery.addEventListener('click', () => switchTab('gallery'));
+els.tabDownload.addEventListener('click', () => switchTab('download'));
 await init();

@@ -3,15 +3,19 @@ html,body{height:100%}
 body{
   margin:0;
   font-family:var(--font-sans);
-  background:var(--color-bg);
+  background:
+    radial-gradient(1200px 500px at 80% -10%, rgba(0,255,163,.10), transparent 60%),
+    radial-gradient(900px 500px at 10% 0%, rgba(0,204,130,.08), transparent 60%),
+    var(--color-bg);
   color:var(--color-text);
   -webkit-font-smoothing:antialiased;
 }
 
 /* ── Estructura del popup ─────────────────────────────────────────────── */
-.popup-body{width:720px;height:600px;overflow:hidden}
+.popup-body{width:500px;max-width:96vw;height:600px;max-height:92vh;overflow:hidden}
 .app{
   height:100%;
+  width:100%;
   display:flex;
   flex-direction:column;
   gap:10px;
@@ -34,6 +38,34 @@ body{
 }
 .topbar .btn-icon{margin-left:0}
 
+.tabs{
+  display:flex;gap:6px;
+  padding:6px 10px;
+  background:var(--color-bg-elev);
+  border:1px solid var(--color-border);
+  border-radius:var(--radius-md);
+  flex:0 0 auto;
+}
+.tab{
+  flex:1;
+  background:transparent;
+  border:none;
+  color:var(--color-text-dim);
+  font-weight:700; font-size:12px;
+  padding:7px 6px;
+  border-radius:var(--radius-sm);
+  cursor:pointer;
+  transition:background .15s ease,color .15s ease;
+}
+.tab:hover{color:var(--color-text)}
+.tab.active{
+  background:color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color:var(--color-primary);
+}
+.tabpanel{display:flex;flex-direction:column;gap:10px;flex:1 1 auto;min-height:0}
+.tabpanel[hidden]{display:none}
+#viewGallery .gallery{min-height:0}
+
 .gallery{
   flex:1 1 auto;
   overflow-y:auto;
@@ -46,6 +78,9 @@ body{
 .gallery::-webkit-scrollbar-thumb:hover{background:var(--color-text-dim)}
 
 .toolbar{flex:0 0 auto}
+.filters{margin-top:8px}
+.filters .input{min-width:0}
+.filters #typeFilter{flex:1 1 110px}
 .downloadbar{
   flex:0 0 auto;
   background:var(--color-bg-elev);
@@ -108,7 +143,7 @@ h1{font-size:18px}
 }
 .btn-primary{
   background:var(--color-gradient);
-  color:#fff;
+  color:#05060a;
   border-color:transparent;
 }
 .btn-primary:hover{filter:brightness(1.12);border-color:transparent}
@@ -117,13 +152,14 @@ h1{font-size:18px}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
 
 .input,select{
-  padding:7px 10px;
+  padding:8px 11px;
   border-radius:var(--radius-sm);
   border:1px solid var(--color-border);
-  background:var(--color-bg);
+  background:var(--color-bg-elev);
   color:var(--color-text);
   font-size:13px;
-  transition:border-color .15s ease, box-shadow .15s ease;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+  transition:border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
 .input:hover,select:hover{border-color:var(--color-text-dim)}
 .input:focus,select:focus{
@@ -132,6 +168,13 @@ h1{font-size:18px}
   box-shadow:0 0 0 2px color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 .input::placeholder{color:var(--color-text-dim)}
+select{
+  appearance:none;
+  background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' stroke='%238ea2c0' stroke-width='1.5' fill='none' stroke-linecap='round'/></svg>");
+  background-repeat:no-repeat;
+  background-position:right 10px center;
+  padding-right:28px;
+}
 .input-narrow{width:84px;flex:0 0 auto}
 .grow{flex:1;min-width:120px}
 
@@ -176,12 +219,24 @@ h1{font-size:18px}
   background:var(--color-surface);
   border-radius:var(--radius-sm);
 }
+.thumb-broken{
+  background:
+    repeating-linear-gradient(45deg, transparent 0 6px, rgba(255,255,255,.03) 6px 12px),
+    var(--color-surface);
+  border:1px dashed var(--color-border);
+}
+.empty-state{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:10px;text-align:center;padding:36px 20px;min-height:180px;
+}
+.empty-state[hidden]{display:none}
+.empty-icon{font-size:30px;line-height:1;opacity:.55}
 .sentinel{grid-column:1/-1;height:1px}
 
 /* ── Varios ───────────────────────────────────────────────────────────── */
 .badge{
   background:var(--color-primary);
-  color:#fff;
+  color:#05060a;
   padding:1px 8px;
   border-radius:999px;
   font-size:11px;font-weight:700;

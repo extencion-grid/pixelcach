@@ -9,31 +9,61 @@
     <img src="../../icons/brand.png" alt="" class="brand">
     <strong>PixelCatch</strong>
     <span class="badge" id="badge">0</span>
-    <span id="status" class="muted small topbar-status">...</span>
-    <button id="options" class="btn btn-icon" data-i18n="settings" title="Ajustes">⚙</button>
+    <span id="status" class="muted small topbar-status" aria-live="polite">...</span>
+    <button id="options" class="btn btn-icon" data-i18n-title="settings" aria-label="Ajustes">⚙</button>
   </header>
 
-  <section class="toolbar card">
-    <div class="row no-margin">
-      <input id="search" class="input grow" data-i18n-placeholder="search" placeholder="Buscar">
-      <button id="selectAll" class="btn" data-i18n="selectAll">Todo</button>
-      <button id="reScan" class="btn btn-icon" data-i18n="rescan" title="Re-escanear">↻</button>
-      <button id="clearList" class="btn btn-icon btn-danger" data-i18n="clearList" title="Vaciar">✕</button>
-    </div>
+  <nav class="tabs" role="tablist">
+    <button id="tabGallery" class="tab active" role="tab" aria-selected="true" data-i18n="gallery">Galería</button>
+    <button id="tabDownload" class="tab" role="tab" aria-selected="false" data-i18n="downloadSection">Descargar</button>
+  </nav>
+
+  <section id="viewGallery" class="tabpanel" role="tabpanel">
+    <section class="toolbar card">
+      <div class="row no-margin">
+        <input id="search" class="input grow" data-i18n-placeholder="search" placeholder="Buscar">
+        <button id="selectAll" class="btn" data-i18n="selectAll">Todo</button>
+        <button id="reScan" class="btn btn-icon" data-i18n-title="rescan" aria-label="Re-escanear">↻</button>
+        <button id="clearList" class="btn btn-icon btn-danger" data-i18n-title="clearList" aria-label="Vaciar">✕</button>
+      </div>
+      <div class="row no-margin filters">
+        <select id="typeFilter" class="input" data-i18n-title="type" aria-label="Tipo">
+          <option value="" data-i18n="all">Todos</option>
+          <option value="img" data-i18n="typeImg">Imagen</option>
+          <option value="bg" data-i18n="typeBg">Fondo</option>
+          <option value="canvas" data-i18n="typeCanvas">Canvas</option>
+          <option value="poster" data-i18n="typePoster">Póster</option>
+          <option value="meta" data-i18n="typeMeta">Metadatos</option>
+          <option value="original" data-i18n="typeOriginal">Original</option>
+          <option value="resource" data-i18n="typeResource">Recurso</option>
+          <option value="icon" data-i18n="typeIcon">Icono</option>
+        </select>
+        <input id="minWidth" class="input input-narrow" type="number" min="0" data-i18n-placeholder="minWidth" placeholder="Ancho mín.">
+        <input id="minHeight" class="input input-narrow" type="number" min="0" data-i18n-placeholder="minHeight" placeholder="Alto mín.">
+        <button id="clearFilters" class="btn btn-icon" data-i18n-title="clearFilters" aria-label="Limpiar">⌫</button>
+      </div>
+    </section>
+
+    <main class="gallery">
+      <div class="grid" id="grid"></div>
+      <div id="emptyState" class="empty-state" hidden>
+        <span class="empty-icon" aria-hidden="true">🖼</span>
+        <p id="emptyText" class="muted small">...</p>
+      </div>
+    </main>
   </section>
 
-  <main class="gallery">
-    <div class="grid" id="grid"></div>
-  </main>
-
-  <footer class="downloadbar">
-    <div class="progress"><i id="progressBar"></i></div>
-    <div class="row no-margin">
-      <input id="folderName" class="input grow" data-i18n-placeholder="folderName" placeholder="Carpeta (opcional)">
-      <button id="downloadFolder" class="btn" data-i18n="downloadFolder">Carpeta</button>
-      <button id="downloadZip" class="btn btn-primary" data-i18n="downloadZip">ZIP</button>
-    </div>
-  </footer>
+  <section id="viewDownload" class="tabpanel" role="tabpanel" hidden>
+    <footer class="downloadbar">
+      <div class="progress"><i id="progressBar"></i></div>
+      <div class="row no-margin">
+        <input id="folderName" class="input grow" data-i18n-placeholder="folderName" placeholder="Carpeta (opcional)">
+        <button id="downloadFolder" class="btn" data-i18n="downloadFolder">Carpeta</button>
+        <button id="downloadZip" class="btn btn-primary" data-i18n="downloadZip">ZIP</button>
+      </div>
+    </footer>
+    <p class="muted small panel-status">Puedes seguir usando la galería de la pestaña superior para revisar antes de descargar.</p>
+  </section>
 </div>
 <script type="module" src="popup.js"></script>
 </body></html>

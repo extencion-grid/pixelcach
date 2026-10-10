@@ -100,6 +100,46 @@ async function activeTabId() {
   return tab?.id ?? null;
 }
 
+async function forEachFrame(tabId, fn) {
+  const frames = await chrome.webNavigation.getAllFrames({ tabId }).catch(() => null);
+  if (!frames?.length) {
+    await fn(undefined);
+    return;
+  }
+  await Promise.all(
+    frames
+      .filter((f) => !f.errorOccurred)
+      .map((f) => fn(f.frameId))
+  );
+}
+
+// Intenta decirle a TODOS los frames (incluidos iframes anidados) que hagan un
+// barrido. El detector también envía deltas por sí mismo, así que con que uno
+// responda basta para considerar que el escaneo se ejecutó.
+async function askAllFramesToScan(tabId) {
+  let any = false;
+  await forEachFrame(tabId, async (frameId) => {
+    const opts = Number.isFinite(frameId) ? { frameId } : undefined;
+    const res = await chrome.tabs
+      .sendMessage(tabId, { type: MSG.SCAN_FULL }, opts)
+      .catch(() => null);
+    any = any || !!res?.ok;
+  });
+  return any;
+}
+
+async function askAllFramesToScanBackgrounds(tabId) {
+  let any = false;
+  await forEachFrame(tabId, async (frameId) => {
+    const opts = Number.isFinite(frameId) ? { frameId } : undefined;
+    const res = await chrome.tabs
+      .sendMessage(tabId, { type: MSG.SCAN_BACKGROUNDS, config: { ...config, detectBackgrounds: true } }, opts)
+      .catch(() => null);
+    any = any || !!res?.ok;
+  });
+  return any;
+}
+
 async function pushConfigToTab(tabId) {
   if (tabId == null) return;
   await configReady;
@@ -526,7 +566,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return respond(async () => {
       const tabId = msg.tabId ?? sender.tab?.id ?? (await activeTabId());
       if (tabId == null) return { tabId: null, items: [] };
-      chrome.tabs.sendMessage(tabId, { type: MSG.SCAN_FULL }).catch(() => {});
+      await askAllFramesToScan(tabId);
       const items = await state.getGallery(tabId);
       await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR }).catch(() => {});
       await updateBadge(tabId, items.length);
@@ -539,10 +579,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       if (tabId == null) return {};
       await pushConfigToTab(tabId);
       await configReady;
-      const res = await chrome.tabs
-        .sendMessage(tabId, { type: MSG.SCAN_BACKGROUNDS, config: { ...config, detectBackgrounds: true } })
-        .catch(() => null);
-      return { scanned: !!res?.ok };
+      const scanned = await askAllFramesToScanBackgrounds(tabId);
+      return { scanned };
     });
   }
   if (msg?.type === MSG.CLEAR_LIST) {

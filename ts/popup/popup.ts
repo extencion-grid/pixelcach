@@ -19,7 +19,17 @@ const els = {
   reScan: $<HTMLButtonElement>('reScan'),
   clearList: $<HTMLButtonElement>('clearList'),
   progressBar: $<El>('progressBar'),
-  options: $<HTMLButtonElement>('options')
+  options: $<HTMLButtonElement>('options'),
+  typeFilter: $<HTMLSelectElement>('typeFilter'),
+  minWidth: $<HTMLInputElement>('minWidth'),
+  minHeight: $<HTMLInputElement>('minHeight'),
+  clearFilters: $<HTMLButtonElement>('clearFilters'),
+  emptyState: $<El>('emptyState'),
+  emptyText: $<El>('emptyText'),
+  tabGallery: $<HTMLButtonElement>('tabGallery'),
+  tabDownload: $<HTMLButtonElement>('tabDownload'),
+  viewGallery: $<El>('viewGallery'),
+  viewDownload: $<El>('viewDownload')
 };
 
 interface Progress {
@@ -52,7 +62,7 @@ let selected = new Set<string>();
 let renderedNodes = new Map<string, { card: HTMLElement; check: HTMLInputElement }>();
 let activeTabId: number | null = null;
 const config: Config = await loadConfig();
-const filter = { q: '' };
+const filter = { q: '', type: '', minW: 0, minH: 0 };
 let renderOffset = 0;
 let sentinelObserver: IntersectionObserver | null = null;
 
@@ -61,10 +71,13 @@ const keyOfPanel = (it: GalleryItem): string =>
 
 function visibleItems(): GalleryItem[] {
   const q = filter.q.trim().toLowerCase();
-  if (!q) return items;
-  return items.filter(
-    (it) => it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q)
-  );
+  return items.filter((it) => {
+    if (filter.type && it.type !== filter.type) return false;
+    if (filter.minW && (it.width || 0) < filter.minW) return false;
+    if (filter.minH && (it.height || 0) < filter.minH) return false;
+    if (q && !(it.src.toLowerCase().includes(q) || (it.url || '').toLowerCase().includes(q))) return false;
+    return true;
+  });
 }
 
 function makeCard(item: GalleryItem, index: number): { card: HTMLElement; check: HTMLInputElement } {
@@ -79,6 +92,14 @@ function makeCard(item: GalleryItem, index: number): { card: HTMLElement; check:
   thumb.alt = '';
   if (!item.truncated) thumb.src = item.src;
   else thumb.classList.add('thumb-empty');
+  thumb.addEventListener(
+    'error',
+    () => {
+      thumb.classList.add('thumb-broken');
+      thumb.title = t('broken');
+    },
+    { once: true }
+  );
 
   const check = document.createElement('input');
   check.type = 'checkbox';
@@ -168,8 +189,22 @@ function updateCounters(): void {
   const total = items.length;
   const chosen = selected.size;
   els.badge.textContent = String(total);
-  els.status.textContent = total ? t('detected', { n: total }) : t('loading');
+  els.status.textContent = t('detected', { n: total });
   els.selectAll.textContent = chosen === total && total > 0 ? t('deselectAll') : t('selectAll');
+  updateEmptyState(total);
+}
+
+function updateEmptyState(total: number): void {
+  const visible = visibleItems().length;
+  if (total === 0) {
+    els.emptyText.textContent = t('empty');
+    els.emptyState.hidden = false;
+  } else if (visible === 0) {
+    els.emptyText.textContent = t('noResults');
+    els.emptyState.hidden = false;
+  } else {
+    els.emptyState.hidden = true;
+  }
 }
 
 function setProgress(ratio: number): void {
@@ -278,6 +313,33 @@ els.search.oninput = () => {
   applyFilters(true);
 };
 
+els.typeFilter.onchange = () => {
+  filter.type = els.typeFilter.value;
+  applyFilters(true);
+};
+
+els.minWidth.oninput = () => {
+  filter.minW = Number(els.minWidth.value) || 0;
+  applyFilters(true);
+};
+
+els.minHeight.oninput = () => {
+  filter.minH = Number(els.minHeight.value) || 0;
+  applyFilters(true);
+};
+
+els.clearFilters.onclick = () => {
+  els.typeFilter.value = '';
+  els.minWidth.value = '';
+  els.minHeight.value = '';
+  els.search.value = '';
+  filter.q = '';
+  filter.type = '';
+  filter.minW = 0;
+  filter.minH = 0;
+  applyFilters(true);
+};
+
 
 
 async function runDownload(zip: boolean): Promise<void> {
@@ -337,5 +399,18 @@ els.clearList.onclick = async () => {
 els.options.onclick = () => {
   chrome.runtime.openOptionsPage();
 };
+
+function switchTab(which: 'gallery' | 'download'): void {
+  const isGallery = which === 'gallery';
+  els.viewGallery.hidden = !isGallery;
+  els.viewDownload.hidden = isGallery;
+  els.tabGallery.classList.toggle('active', isGallery);
+  els.tabDownload.classList.toggle('active', !isGallery);
+  els.tabGallery.setAttribute('aria-selected', String(isGallery));
+  els.tabDownload.setAttribute('aria-selected', String(!isGallery));
+}
+
+els.tabGallery.addEventListener('click', () => switchTab('gallery'));
+els.tabDownload.addEventListener('click', () => switchTab('download'));
 
 await init();

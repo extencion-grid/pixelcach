@@ -3,6 +3,20 @@ type Dict = Record<string, string>;
 const messages: Record<'es' | 'en', Dict> = {
   es: {
     openGallery: 'Abrir galería',
+    gallery: 'Galería',
+    empty: 'Aún no hay imágenes. Navega la página o pulsa re-escanear.',
+    noResults: 'Sin resultados para el filtro',
+    minHeight: 'Alto mín.',
+    clearFilters: 'Limpiar',
+    typeImg: 'Imagen',
+    typeBg: 'Fondo',
+    typeCanvas: 'Canvas',
+    typePoster: 'Póster',
+    typeMeta: 'Metadatos',
+    typeOriginal: 'Original',
+    typeResource: 'Recurso',
+    typeIcon: 'Icono',
+    broken: 'No disponible',
     selectAll: 'Seleccionar todo',
     deselectAll: 'Deseleccionar todo',
     downloadFolder: 'Carpeta',
@@ -47,6 +61,20 @@ const messages: Record<'es' | 'en', Dict> = {
   },
   en: {
     openGallery: 'Open gallery',
+    gallery: 'Gallery',
+    empty: 'No images yet. Browse the page or hit rescan.',
+    noResults: 'No results for this filter',
+    minHeight: 'Min height',
+    clearFilters: 'Clear',
+    typeImg: 'Image',
+    typeBg: 'Background',
+    typeCanvas: 'Canvas',
+    typePoster: 'Poster',
+    typeMeta: 'Metadata',
+    typeOriginal: 'Original',
+    typeResource: 'Resource',
+    typeIcon: 'Icon',
+    broken: 'Unavailable',
     selectAll: 'Select all',
     deselectAll: 'Deselect all',
     downloadFolder: 'Folder',
@@ -119,5 +147,10 @@ export function installI18n(root: ParentNode = document): void {
   });
   root.querySelectorAll<HTMLInputElement>('[data-i18n-placeholder]').forEach((el) => {
     el.placeholder = t(el.dataset['i18nPlaceholder'] || '');
+  });
+  root.querySelectorAll<HTMLElement>('[data-i18n-title]').forEach((el) => {
+    const label = t(el.dataset['i18nTitle'] || '');
+    el.title = label;
+    el.setAttribute('aria-label', label);
   });
 }

@@ -15,7 +15,8 @@
 
   const DETECT_ATTRS = [
     'src', 'srcset', 'sizes', 'poster',
-    'data-src', 'data-srcset', 'data-original', 'data-lazy-src', 'data-lazy'
+    'data-src', 'data-srcset', 'data-original', 'data-lazy-src', 'data-lazy',
+    'data-bg', 'data-background', 'data-poster', 'data-thumb', 'data-image'
   ];
   const PAGE_RE = /\.(html?|php|aspx?|jsp|cfm)($|[?#])/i;
 
@@ -26,10 +27,17 @@
     return i >= 0 ? url.slice(0, i) : url;
   }
 
+  // Resuelve cualquier forma de URL (relativa, absoluta, //host) contra el
+  // documento actual. Antes solo se cubría la barra inicial, así que el srcset
+  // o los data-src con rutas como "assets/pic.png" quedaban sin resolver y la
+  // descarga fallaba en el service worker.
   function toAbsolute(url) {
     if (!url) return '';
-    if (url.startsWith('/') && !url.startsWith('//')) return location.origin + url;
-    return url;
+    try {
+      return new URL(url, location.href).href;
+    } catch {
+      return url;
+    }
   }
   const MAX_BATCH = 50;
   const FLUSH_DELAY = 80;
@@ -107,15 +115,19 @@
   function enqueue(src, width, height, type = 'img') {
     if (!src) return false;
     if (typeof src === 'string') {
-      if (!/^(data:|blob:|https?:|\/\/)/i.test(src)) src = toAbsolute(src);
-      src = stripHash(src);
+      const raw = src.trim();
+      // data:/blob:/javascript: se dejan tal cual (un data: SVG puede llevar
+      // '#' en colores, no hay que recortarlo); el resto se resuelve contra la
+      // página para que las rutas relativas del srcset/lazy también descarguen.
+      src = /^(data:|blob:|javascript:)/i.test(raw) ? raw : toAbsolute(stripHash(raw));
+      if (!src) return false;
     }
     const isData = src.startsWith('data:');
     const hash = isData ? fnv1a(src) : '';
     const dataLength = isData ? src.length : 0;
     const fp = fingerprint(src, width, height, hash, dataLength);
     if (seen.has(fp)) return false;
-    if (!passesSize(width, height, src, type)) return false;
+    if (!passesSize(width, height)) return false;
     seen.add(fp);
     pendingQueue.push({ src, width: width || 0, height: height || 0, url: location.href, type, hash, dataLength });
     scheduleFlush();
@@ -124,13 +136,23 @@
 
   function bestFromSrcset(srcset) {
     if (!srcset) return '';
-    return (
-      srcset
-        .split(',')
-        .map((c) => c.trim().split(/\s+/))
-        .filter((p) => p[0])
-        .sort((a, b) => parseFloat(b[1] || '1x') - parseFloat(a[1] || '1x'))[0]?.[0] || ''
-    );
+    let best = '';
+    let bestScore = -1;
+    for (const candidate of srcset.split(',')) {
+      const parts = candidate.trim().split(/\s+/);
+      const url = parts[0];
+      if (!url) continue;
+      const descriptor = parts[1] || '1x';
+      // Descriptores 'w' (ancho real) o 'x' (densidad): se normalizan a una
+      // escala común para que una mezcla de ambos no elija la peor variante.
+      const n = parseFloat(descriptor);
+      const score = Number.isFinite(n) ? (descriptor.endsWith('w') ? n : n * 1000) : 0;
+      if (score > bestScore) {
+        bestScore = score;
+        best = url;
+      }
+    }
+    return best;
   }
 
   function lazyAttr(el) {
@@ -290,6 +312,7 @@
     if (root.nodeType === 9 || root.nodeType === 11) {
       collect(root);
       reportSvgRefs(root);
+      reportMiscElements(root);
       root.querySelectorAll?.('*').forEach((el) => {
         if (el.shadowRoot) watchTree(el.shadowRoot);
       });
@@ -308,46 +331,137 @@
         if (href) enqueue(href, 0, 0, 'img');
       }
       reportSvgRefs(root);
+      reportMiscElements(root);
     }
 
     for (const img of root.shadowRoot?.querySelectorAll?.('img') || []) watchImage(img);
     if (foundCanvas) sweepCanvases();
   }
 
-  function reportBackground(el) {
+  // Extrae todas las url() de un valor CSS: cubre background-image normal,
+  // múltiples capas y image-set()/-webkit-image-set(), y content:url().
+  const CSS_URL_RE = /url\((["']?)(.*?)\1\)/g;
+  function extractUrls(cssValue) {
+    const out = [];
+    if (!cssValue || cssValue === 'none') return out;
+    CSS_URL_RE.lastIndex = 0;
+    let m;
+    while ((m = CSS_URL_RE.exec(cssValue))) {
+      const u = (m[2] || '').trim();
+      if (u) out.push(u);
+    }
+    return out;
+  }
+
+  const CSS_IMG_PROPS = ['backgroundImage', 'maskImage', 'webkitMaskImage', 'borderImageSource', 'listStyleImage'];
+
+  // Recoge imágenes de las propiedades CSS del elemento (y, opcionalmente, de
+  // sus pseudo-elementos ::before/::after vía content:url()).
+  function reportCssImages(el, withPseudo = false) {
     if (!el || el.nodeType !== 1) return;
-    const bg = getComputedStyle(el).backgroundImage;
-    if (!bg || bg === 'none') return;
-    for (const part of bg.split(',')) {
-      const m = /url\(["']?(.+?)["']?\)/.exec(part.trim());
-      if (!m || !m[1]) continue;
-      const rect = el.getBoundingClientRect();
-      enqueue(m[1], Math.round(rect.width), Math.round(rect.height), 'bg');
+    const rect = el.getBoundingClientRect();
+    const w = Math.round(rect.width);
+    const h = Math.round(rect.height);
+    const style = getComputedStyle(el);
+    for (const prop of CSS_IMG_PROPS) {
+      for (const url of extractUrls(style[prop])) enqueue(url, w, h, 'bg');
+    }
+    if (!withPseudo) return;
+    for (const pseudo of ['::before', '::after']) {
+      const ps = getComputedStyle(el, pseudo);
+      if (!ps) continue;
+      for (const url of extractUrls(ps.content)) enqueue(url, w, h, 'bg');
+      for (const prop of CSS_IMG_PROPS) {
+        for (const url of extractUrls(ps[prop])) enqueue(url, w, h, 'bg');
+      }
     }
   }
 
   function scanBackgrounds() {
     if (!config.detectBackgrounds) return;
-    // Como image-downloader: estilo computado de TODOS los elementos que
-    // pueden llevar fondo ([class] y/o [style]), no solo style inline.
-    const els = document.querySelectorAll('[class], [style]');
+    // Se recorren TODOS los elementos (no solo [class]/[style]) porque un fondo
+    // puede venir de una regla CSS sin clase; tope de seguridad en páginas
+    // enormes. Los pseudo-elementos solo se miran donde hay class/style.
+    const els = document.querySelectorAll('body *');
     let n = 0;
     for (const el of els) {
-      if (n++ > 4000) break; // tope de seguridad en páginas enormes
-      const bg = getComputedStyle(el).backgroundImage;
-      if (!bg || bg === 'none') continue;
-      for (const part of bg.split(',')) {
-        const m = /url\(["']?(.+?)["']?\)/.exec(part.trim());
-        if (!m || !m[1]) continue;
-        enqueue(m[1], Math.round(el.getBoundingClientRect().width), Math.round(el.getBoundingClientRect().height), 'bg');
-      }
+      if (n++ > 6000) break;
+      reportCssImages(el, !!el.className || el.hasAttribute('style'));
     }
+  }
+
+  function reportVideoPosters() {
+    for (const v of document.querySelectorAll('video[poster]')) {
+      const poster = v.getAttribute('poster');
+      if (!poster) continue;
+      enqueue(poster, v.videoWidth || v.clientWidth || 0, v.videoHeight || v.clientHeight || 0, 'poster');
+    }
+  }
+
+  // Imágenes publicadas en metadatos de la página (og:image, twitter:image,
+  // preload/link de imagen) que no siempre aparecen como <img>.
+  function reportMetaImages() {
+    const sel = [
+      'meta[property="og:image"]',
+      'meta[property="og:image:url"]',
+      'meta[property="og:image:secure_url"]',
+      'meta[name="twitter:image"]',
+      'meta[name="twitter:image:src"]',
+      'link[rel="image_src"]',
+      'link[rel="preload"][as="image"]'
+    ].join(',');
+    for (const el of document.querySelectorAll(sel)) {
+      const v = el.getAttribute('content') || el.getAttribute('href');
+      if (v) enqueue(v, 0, 0, 'meta');
+    }
+  }
+
+  const IMG_URL_RE = /\.(png|jpe?g|gif|webp|avif|bmp|ico|svg)($|[?#])/i;
+
+  function processMiscEl(el) {
+    if (!el || el.nodeType !== 1) return;
+    const tag = el.tagName;
+    if (tag === 'INPUT' && (el.getAttribute('type') || '').toLowerCase() === 'image') {
+      const src = el.getAttribute('src');
+      if (src) enqueue(src, el.width || el.clientWidth || 0, el.height || el.clientHeight || 0, 'img');
+    } else if (tag === 'OBJECT') {
+      const data = el.getAttribute('data');
+      const type = el.getAttribute('type') || '';
+      if (data && (/^image\//i.test(type) || IMG_URL_RE.test(data))) {
+        enqueue(data, el.clientWidth || 0, el.clientHeight || 0, 'img');
+      }
+    } else if (tag === 'EMBED') {
+      const src = el.getAttribute('src');
+      const type = el.getAttribute('type') || '';
+      if (src && (/^image\//i.test(type) || IMG_URL_RE.test(src))) {
+        enqueue(src, el.clientWidth || 0, el.clientHeight || 0, 'img');
+      }
+    } else if (tag === 'LINK') {
+      const rel = (el.getAttribute('rel') || '').toLowerCase();
+      if (rel.includes('icon')) enqueue(el.getAttribute('href'), 0, 0, 'icon');
+    } else if (tag === 'TEMPLATE' && el.content) {
+      watchTree(el.content);
+    }
+  }
+
+  // Fuentes que no son <img>: input[type=image], object/embed de imagen,
+  // favicon/apple-touch-icon y el contenido de <template> (no visible pero
+  // descargable). Procesa el nodo raíz además de sus descendientes.
+  function reportMiscElements(root) {
+    if (!root?.querySelectorAll) return;
+    if (root.nodeType === 1) processMiscEl(root);
+    const sel =
+      'input[type="image"][src], object[data], embed[src], link[rel~="icon"][href], link[rel="apple-touch-icon"][href], link[rel="apple-touch-icon-precomposed"][href], template';
+    for (const el of root.querySelectorAll(sel)) processMiscEl(el);
   }
 
   function deepScan() {
     seen.clear();
     watchTree(document);
+    reportMiscElements(document);
     scanBackgrounds();
+    reportVideoPosters();
+    reportMetaImages();
     debug('deep_scan');
   }
 
@@ -356,8 +470,12 @@
       for (const m of muts) {
         if (m.type === 'childList') {
           for (const node of m.addedNodes) watchTree(node);
-        } else if (m.type === 'attributes' && DETECT_ATTRS.includes(m.attributeName)) {
-          if (m.target.tagName === 'IMG') reportImage(m.target);
+        } else if (m.type === 'attributes') {
+          if (m.target.tagName === 'IMG' && DETECT_ATTRS.includes(m.attributeName)) {
+            reportImage(m.target);
+          } else if (m.attributeName === 'style' && config.detectBackgrounds) {
+            reportCssImages(m.target);
+          }
         }
       }
     });
@@ -366,7 +484,7 @@
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: DETECT_ATTRS
+      attributeFilter: [...DETECT_ATTRS, 'style']
     });
   }
 
